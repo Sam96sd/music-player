@@ -1,0 +1,6 @@
+{
+  "name": "PulseWave",
+  "description": "Ultra-lightweight, ad-free local music player with WhatsApp voice-note filtering, multi-source online synced lyrics search, offline LRC caching, timestamp offset calibration, sleep timer with fade-out, and quick tag editing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
