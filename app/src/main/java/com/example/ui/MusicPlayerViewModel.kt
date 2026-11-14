@@ -1,8 +1,12 @@
 package com.example.ui
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.MusicRepository
@@ -35,8 +39,8 @@ enum class AppTab {
 }
 
 enum class SmartPlaylistType(val title: String, val subtitle: String) {
-    RECENTLY_ADDED("Recently Added", "Latest MP3, M4A & FLAC arrivals"),
-    MOST_PLAYED("Most Played", "Your heavy rotation studio tracks"),
+    RECENTLY_ADDED("Recently Added", "Latest music arrivals"),
+    MOST_PLAYED("Most Played", "Your heavy rotation tracks"),
     UNPLAYED("Unplayed Gems", "Fresh tracks with 0 plays"),
     OFFLINE_LYRICS_READY("Offline Lyrics Ready", "Songs with cached LRC synced on device")
 }
@@ -63,12 +67,13 @@ data class LyricsSearchUiState(
 data class FilterSettingsState(
     val strictKnownFormatsOnly: Boolean = true, // Only .mp3, .m4a, .flac
     val blockWhatsAppVoiceNotes: Boolean = true, // Block PTT-*, AUD-*, voice_note* even if long .m4a
-    val selectedFormatChip: String = "ALL", // ALL, FLAC, MP3, M4A
     val searchQuery: String = ""
 )
 
 data class MusicPlayerUiState(
     val activeTab: AppTab = AppTab.LIBRARY,
+    val hasAudioPermission: Boolean = false,
+    val isScanning: Boolean = false,
     val visibleTracks: List<TrackEntity> = emptyList(),
     val blockedVoiceNotes: List<FilteredTrackItem> = emptyList(),
     val hiddenTracks: List<TrackEntity> = emptyList(),
@@ -97,6 +102,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     )
 
     private val _activeTab = MutableStateFlow(AppTab.LIBRARY)
+    private val _hasAudioPermission = MutableStateFlow(checkAudioPermissionGranted())
+    private val _isScanning = MutableStateFlow(false)
     private val _currentTrackId = MutableStateFlow<Long?>(null)
     private val _isPlaying = MutableStateFlow(false)
     private val _isShuffle = MutableStateFlow(false)
@@ -153,6 +160,20 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         snap.copy(durationMs = dur)
     }
 
+    private data class MetaSnapshot(
+        val hasPermission: Boolean,
+        val isScanning: Boolean,
+        val statusBanner: String?
+    )
+
+    private val metaFlow = combine(
+        _hasAudioPermission,
+        _isScanning,
+        _statusBanner
+    ) { perm, scanning, banner ->
+        MetaSnapshot(perm, scanning, banner)
+    }
+
     val uiState: StateFlow<MusicPlayerUiState> = combine(
         coreDataFlow,
         playbackFlow,
@@ -174,15 +195,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 blockVoiceNotePatterns = filter.blockWhatsAppVoiceNotes
             )
             if (verdict.isAllowed) {
-                val matchesFormat = filter.selectedFormatChip == "ALL" ||
-                    track.extension.equals(filter.selectedFormatChip, ignoreCase = true)
                 val q = filter.searchQuery.trim().lowercase()
                 val matchesQuery = q.isEmpty() ||
                     track.title.lowercase().contains(q) ||
                     track.artist.lowercase().contains(q) ||
                     track.album.lowercase().contains(q)
 
-                if (matchesFormat && matchesQuery) {
+                if (matchesQuery) {
                     visible.add(track)
                 }
             } else {
@@ -213,16 +232,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             -1
         }
 
-        // Clean playlists so voice notes or hidden tracks never appear inside playlists either
-        val allowedIds = visible.map { it.id }.toSet() +
-            core.allTracks.filter {
-                !it.isHidden && VoiceNoteFilterEngine.evaluateTrack(
-                    it,
-                    core.folders,
-                    filter.strictKnownFormatsOnly,
-                    filter.blockWhatsAppVoiceNotes
-                ).isAllowed
-            }.map { it.id }.toSet()
+        val allowedIds = core.allTracks.filter {
+            !it.isHidden && VoiceNoteFilterEngine.evaluateTrack(
+                it,
+                core.folders,
+                filter.strictKnownFormatsOnly,
+                filter.blockWhatsAppVoiceNotes
+            ).isAllowed
+        }.map { it.id }.toSet()
 
         val cleanPlaylists = core.playlists.map { pwt ->
             pwt.copy(tracks = pwt.tracks.filter { it.id in allowedIds })
@@ -246,22 +263,50 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             playbackDurationMs = activeTrack?.durationMs ?: playback.durationMs,
             filterSettings = filter,
             sleepTimer = sleep,
-            lyricsSearch = lyricsModal,
-            statusBannerMessage = null
+            lyricsSearch = lyricsModal
         )
-    }.combine(_statusBanner) { state, banner ->
-        state.copy(statusBannerMessage = banner)
+    }.combine(metaFlow) { state, meta ->
+        state.copy(
+            hasAudioPermission = meta.hasPermission,
+            isScanning = meta.isScanning,
+            statusBannerMessage = meta.statusBanner
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
-        initialValue = MusicPlayerUiState()
+        initialValue = MusicPlayerUiState(hasAudioPermission = checkAudioPermissionGranted())
     )
 
     init {
         viewModelScope.launch {
-            repository.ensureSeeded()
+            repository.ensureDefaultFilterRules()
+            if (checkAudioPermissionGranted()) {
+                _hasAudioPermission.value = true
+                scanDeviceMediaStore(silent = true)
+            }
         }
         startProgressTicker()
+    }
+
+    private fun checkAudioPermissionGranted(): Boolean {
+        val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return ContextCompat.checkSelfPermission(
+            getApplication(),
+            perm
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun onAudioPermissionResult(granted: Boolean) {
+        _hasAudioPermission.value = granted
+        if (granted) {
+            scanDeviceMediaStore(silent = false)
+        } else {
+            showBanner("Audio permission is needed to scan songs on your device")
+        }
     }
 
     fun selectTab(tab: AppTab) {
@@ -320,8 +365,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             }
             mediaPlayer = mp
         }.onFailure {
-            // Fallback simulated playback clock if an external SAF URI lacks read permission
-            _isPlaying.value = true
+            _isPlaying.value = false
+            showBanner("Unable to play \"${track.title}\" — try rescanning library")
         }
     }
 
@@ -412,14 +457,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     val mp = mediaPlayer
                     if (mp != null && runCatching { mp.isPlaying }.getOrDefault(false)) {
                         _playbackPositionMs.value = mp.currentPosition.toLong()
-                    } else {
-                        val nextPos = _playbackPositionMs.value + 150L
-                        val dur = _playbackDurationMs.value
-                        if (nextPos >= dur) {
-                            handleTrackCompleted()
-                        } else {
-                            _playbackPositionMs.value = nextPos
-                        }
                     }
                 }
             }
@@ -433,9 +470,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             isSheetOpen = true,
             isSearching = true,
             queryTitle = target.title,
-            queryArtist = target.artist
+            queryArtist = if (target.artist == "Unknown Artist") "" else target.artist
         )
-        executeOnlineLyricsSearch(target.title, target.artist)
+        executeOnlineLyricsSearch(
+            target.title,
+            if (target.artist == "Unknown Artist") "" else target.artist
+        )
     }
 
     fun updateLyricsSearchQuery(title: String, artist: String) {
@@ -458,14 +498,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         isSearching = false,
                         candidates = results,
                         selectedCandidateId = results.firstOrNull()?.id,
-                        errorMessage = if (results.isEmpty()) "No lyrics found. Try refining title or artist." else null
+                        errorMessage = if (results.isEmpty()) "No lyrics found online. Try adjusting the song title or artist." else null
                     )
                 }
             }.onFailure { err ->
                 _lyricsSearch.update {
                     it.copy(
                         isSearching = false,
-                        errorMessage = "Search error: ${err.localizedMessage ?: "Check connection"}"
+                        errorMessage = "Search error: ${err.localizedMessage ?: "Check internet connection"}"
                     )
                 }
             }
@@ -538,10 +578,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         _filterSettings.update { it.copy(searchQuery = query) }
     }
 
-    fun selectFormatChip(format: String) {
-        _filterSettings.update { it.copy(selectedFormatChip = format) }
-    }
-
     fun toggleStrictKnownFormats(enabled: Boolean) {
         _filterSettings.update { it.copy(strictKnownFormatsOnly = enabled) }
         showBanner(
@@ -612,7 +648,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 _currentTrackId.value = null
             }
             repository.deleteTrackFromDevice(track)
-            showBanner("Permanently deleted \"${track.title}\" from device")
+            showBanner("Removed \"${track.title}\" from device")
         }
     }
 
@@ -673,7 +709,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 remaining--
                 _sleepTimer.update { it.copy(remainingSeconds = remaining) }
 
-                // Gentle 30-second volume fade-out
                 if (_sleepTimer.value.gentleFadeOut && remaining in 1..30) {
                     val fadedVol = (remaining / 30f).coerceIn(0.08f, 1.0f)
                     currentVolume = fadedVol
@@ -717,13 +752,23 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun scanDeviceMediaStore() {
+    fun scanDeviceMediaStore(silent: Boolean = false) {
+        if (!checkAudioPermissionGranted()) {
+            _hasAudioPermission.value = false
+            if (!silent) {
+                showBanner("Please grant audio access permission to scan your music")
+            }
+            return
+        }
+        _hasAudioPermission.value = true
+        if (_isScanning.value) return
+
         viewModelScope.launch {
-            val count = repository.scanPublicMediaStore()
-            if (count > 0) {
-                showBanner("Scanned $count device audio track(s) through Voice Shield")
-            } else {
-                showBanner("Library synced • All local MP3/M4A/FLAC tracks up to date")
+            _isScanning.value = true
+            val count = runCatching { repository.scanPublicMediaStore() }.getOrDefault(0)
+            _isScanning.value = false
+            if (!silent) {
+                showBanner("Library synced • $count audio file(s) scanned cleanly")
             }
         }
     }

@@ -158,42 +158,23 @@ fun NowPlayingLyricsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                if (parsedLyrics != null) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(ElectricCyan.copy(alpha = 0.16f))
-                            .border(1.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                            .background(SignalMint.copy(alpha = 0.16f))
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Text(
-                            text = track.qualityBadge,
+                            text = "SAVED OFFLINE • ${parsedLyrics.sourceName}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = ElectricCyan,
-                            fontWeight = FontWeight.Bold
+                            color = SignalMint,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                    if (parsedLyrics != null) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SignalMint.copy(alpha = 0.16f))
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = "SAVED OFFLINE • ${parsedLyrics.sourceName}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = SignalMint,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    Spacer(modifier = Modifier.height(6.dp))
                 }
-                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = track.title,
                     style = MaterialTheme.typography.headlineMedium,

@@ -274,11 +274,6 @@ fun PlaylistsScreen(
                                             color = TextSecondary
                                         )
                                     }
-                                    Text(
-                                        text = track.extension.uppercase(),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = SignalMint
-                                    )
                                 }
                             }
                         }
@@ -403,7 +398,7 @@ fun PlaylistsScreen(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "${track.artist} • .${track.extension.uppercase()}",
+                                            text = track.artist,
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = TextSecondary
                                         )

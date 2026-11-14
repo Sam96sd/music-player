@@ -1,6 +1,5 @@
 <resources>
-    <string name="app_name">PulseWave</string>
-    <string name="studio_subtitle">Pure Local Audio • Voice-Note Shield • Offline LRC</string>
+    <string name="app_name">Muffin Music Player</string>
     <string name="tab_library">Library</string>
     <string name="tab_playlists">Playlists</string>
     <string name="tab_now_playing">Player &amp; Lyrics</string>
@@ -17,5 +16,5 @@
     <string name="hide_from_library">Hide from Library (Safe)</string>
     <string name="delete_from_device">Delete File from Device</string>
     <string name="import_audio_files">Import Audio Files</string>
-    <string name="scan_device_music">Scan Device MediaStore</string>
+    <string name="scan_device_music">Rescan Library</string>
 </resources>

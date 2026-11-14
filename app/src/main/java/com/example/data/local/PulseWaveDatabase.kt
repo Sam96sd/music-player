@@ -13,7 +13,7 @@ import androidx.room.RoomDatabase
         PlaylistTrackCrossRef::class,
         BlacklistedFolderEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class PulseWaveDatabase : RoomDatabase() {

@@ -46,6 +46,20 @@ class ExampleUnitTest {
             durationMs = 1_200_000L
         )
         assertFalse(VoiceNoteFilterEngine.evaluateTrack(longWhatsappM4a, rules).isAllowed)
+
+        // Ringtones and alarms are always excluded
+        val ringtone = TrackEntity(
+            id = 3,
+            title = "Morning Bell",
+            artist = "System",
+            album = "Ringtones",
+            filePath = "/storage/emulated/0/Ringtones/Morning_Bell.mp3",
+            uriString = "file:///Ringtones/Morning_Bell.mp3",
+            extension = "mp3",
+            durationMs = 30_000L
+        )
+        assertFalse(VoiceNoteFilterEngine.evaluateTrack(ringtone, rules).isAllowed)
+        assertTrue(VoiceNoteFilterEngine.isSystemAlertPath("/storage/emulated/0/Alarms/wake.mp3"))
     }
 
     @Test

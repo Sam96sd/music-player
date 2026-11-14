@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "PulseWave"
+rootProject.name = "Muffin Music Player"
 
 include(":app")

@@ -466,7 +466,7 @@ fun DualModeDeleteDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "Choose whether to safely hide this track from PulseWave or permanently delete the file from device storage:",
+                    text = "Choose whether to safely hide this track from Muffin Music Player or permanently delete the file from device storage:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )

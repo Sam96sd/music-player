@@ -19,6 +19,14 @@ object VoiceNoteFilterEngine {
 
     val ALLOWED_MUSIC_EXTENSIONS = setOf("mp3", "m4a", "flac")
 
+    private val SYSTEM_AUDIO_PATHS = listOf(
+        "/ringtones/",
+        "/notifications/",
+        "/alarms/",
+        "/system/media/audio/",
+        "/product/media/audio/"
+    )
+
     private val WHATSAPP_VOICE_NOTE_REGEXES = listOf(
         Regex("^ptt-\\d{8}-wa.*", RegexOption.IGNORE_CASE),
         Regex("^aud-\\d{8}-wa.*", RegexOption.IGNORE_CASE),
@@ -29,6 +37,11 @@ object VoiceNoteFilterEngine {
         Regex("^whatsapp[_\\s-]?voice.*", RegexOption.IGNORE_CASE),
         Regex("^call[_\\s-]?recording.*", RegexOption.IGNORE_CASE)
     )
+
+    fun isSystemAlertPath(filePath: String): Boolean {
+        val normalized = filePath.lowercase()
+        return SYSTEM_AUDIO_PATHS.any { normalized.contains(it) }
+    }
 
     fun evaluateTrack(
         track: TrackEntity,
@@ -47,6 +60,16 @@ object VoiceNoteFilterEngine {
         val normalizedExt = track.extension.lowercase().trim().removePrefix(".")
         val normalizedPath = track.filePath.lowercase()
         val fileName = track.filePath.substringAfterLast('/').lowercase()
+        val baseName = fileName.substringBeforeLast('.')
+
+        // 0. Always exclude ringtones, notifications, and alarms paths
+        if (isSystemAlertPath(normalizedPath)) {
+            return FilterVerdict(
+                isAllowed = false,
+                blockedReason = "System ringtone / notification / alarm path",
+                matchedRuleLabel = "System Audio Guard"
+            )
+        }
 
         // 1. Check active folder blacklist rules first (catches WhatsApp Voice Notes even if saved as .m4a)
         for (rule in blacklistedFolders) {
@@ -65,7 +88,7 @@ object VoiceNoteFilterEngine {
         // 2. Check WhatsApp / Messaging Voice Note filename heuristics (even for long .m4a files)
         if (blockVoiceNotePatterns) {
             for (regex in WHATSAPP_VOICE_NOTE_REGEXES) {
-                if (regex.matches(fileName) || regex.matches(track.title.lowercase())) {
+                if (regex.matches(fileName) || regex.matches(baseName) || regex.matches(track.title.lowercase())) {
                     return FilterVerdict(
                         isAllowed = false,
                         blockedReason = "Voice note filename signature ($fileName)",

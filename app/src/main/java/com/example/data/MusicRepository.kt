@@ -3,9 +3,9 @@ package com.example.data
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import com.example.data.audio.StudioAudioSeeder
 import com.example.data.local.BlacklistedFolderEntity
 import com.example.data.local.MusicDao
 import com.example.data.local.PlaylistEntity
@@ -15,8 +15,11 @@ import com.example.data.local.SavedLyricsEntity
 import com.example.data.local.TrackEntity
 import com.example.data.network.MultiSourceLyricsClient
 import com.example.data.network.OnlineLyricCandidate
+import com.example.domain.VoiceNoteFilterEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -30,9 +33,51 @@ class MusicRepository(
     val playlistsWithTracks: Flow<List<PlaylistWithTracks>> = dao.observePlaylistsWithTracks()
     val blacklistedFolders: Flow<List<BlacklistedFolderEntity>> = dao.observeBlacklistedFolders()
 
-    suspend fun ensureSeeded() {
-        StudioAudioSeeder.ensureSeeded(context, dao)
+    private val scanMutex = Mutex()
+
+    suspend fun ensureDefaultFilterRules() {
+        if (dao.getBlacklistedFolderCount() == 0) {
+            dao.insertBlacklistedFolders(defaultBlacklistedFolders())
+        }
     }
+
+    private fun defaultBlacklistedFolders(): List<BlacklistedFolderEntity> = listOf(
+        BlacklistedFolderEntity(
+            pathPattern = "/whatsapp/media/whatsapp voice notes",
+            label = "WhatsApp Voice Notes",
+            description = "Blocks all incoming & sent PTT voice notes (including long recordings)",
+            isEnabled = true,
+            isBuiltInRule = true
+        ),
+        BlacklistedFolderEntity(
+            pathPattern = "/whatsapp/media/whatsapp audio",
+            label = "WhatsApp Forwarded Audio",
+            description = "Blocks AUD-* voice clips and forwarded .m4a/.opus audio in WhatsApp",
+            isEnabled = true,
+            isBuiltInRule = true
+        ),
+        BlacklistedFolderEntity(
+            pathPattern = "/telegram/telegram audio",
+            label = "Telegram Voice & Audio",
+            description = "Blocks Telegram voice memos and chat audio attachments",
+            isEnabled = true,
+            isBuiltInRule = true
+        ),
+        BlacklistedFolderEntity(
+            pathPattern = "/recordings",
+            label = "Voice & Call Recordings",
+            description = "Blocks system voice recorder and call recording folders",
+            isEnabled = true,
+            isBuiltInRule = true
+        ),
+        BlacklistedFolderEntity(
+            pathPattern = "/notifications",
+            label = "Notifications, Ringtones & Alarms",
+            description = "Excludes system alert tones, ringtones, and alarms",
+            isEnabled = true,
+            isBuiltInRule = true
+        )
+    )
 
     suspend fun updateTrackTags(trackId: Long, title: String, artist: String, album: String) {
         dao.updateTrackTags(trackId, title.trim(), artist.trim(), album.trim())
@@ -45,12 +90,13 @@ class MusicRepository(
     suspend fun deleteTrackFromDevice(track: TrackEntity) = withContext(Dispatchers.IO) {
         runCatching {
             val uri = Uri.parse(track.uriString)
-            if (uri.scheme == "file") {
-                uri.path?.let { path ->
+            when (uri.scheme) {
+                "file" -> uri.path?.let { path ->
                     val file = File(path)
-                    if (file.exists()) {
-                        file.delete()
-                    }
+                    if (file.exists()) file.delete()
+                }
+                "content" -> {
+                    context.contentResolver.delete(uri, null, null)
                 }
             }
         }
@@ -134,6 +180,10 @@ class MusicRepository(
 
     suspend fun importAudioUris(uris: List<Uri>): Int = withContext(Dispatchers.IO) {
         var importedCount = 0
+        val existingTracks = dao.getAllTracksOnce()
+        val existingBySourceKey = existingTracks.associateBy { it.sourceKey }
+        val existingByPath = existingTracks.associateBy { it.filePath.lowercase() }
+
         for (uri in uris) {
             runCatching {
                 val resolver = context.contentResolver
@@ -150,16 +200,30 @@ class MusicRepository(
                 val baseTitle = displayName.substringBeforeLast('.')
                     .replace('_', ' ')
                     .replace('-', ' ')
-                val track = TrackEntity(
-                    title = baseTitle,
-                    artist = "Local Artist",
-                    album = "Imported Audio",
-                    filePath = "/storage/emulated/0/Music/Imported/$displayName",
-                    uriString = uri.toString(),
-                    extension = ext,
-                    durationMs = 180_000L,
-                    qualityBadge = "${ext.uppercase()} • Local File"
-                )
+                    .trim()
+                val sourceKey = "saf_$uri"
+                val virtualPath = "/storage/emulated/0/Music/Imported/$displayName"
+
+                val existing = existingBySourceKey[sourceKey] ?: existingByPath[virtualPath.lowercase()]
+                val track = if (existing != null) {
+                    existing.copy(
+                        uriString = uri.toString(),
+                        extension = ext
+                    )
+                } else {
+                    TrackEntity(
+                        sourceKey = sourceKey,
+                        mediaStoreId = null,
+                        title = baseTitle.ifBlank { displayName },
+                        artist = "Local Artist",
+                        album = "Imported Audio",
+                        filePath = virtualPath,
+                        uriString = uri.toString(),
+                        extension = ext,
+                        durationMs = 180_000L,
+                        qualityBadge = ext.uppercase()
+                    )
+                }
                 dao.insertTrack(track)
                 importedCount++
             }
@@ -167,59 +231,184 @@ class MusicRepository(
         importedCount
     }
 
-    suspend fun scanPublicMediaStore(): Int = withContext(Dispatchers.IO) {
-        var count = 0
-        runCatching {
-            val projection = arrayOf(
+    /**
+     * Scans MediaStore.Audio.Media (IS_MUSIC != 0) on the device, excludes ringtones,
+     * notifications, and alarms, deduplicates by MediaStore ID and normalized file path,
+     * and atomically replaces/updates MediaStore tracks in Room without creating duplicates.
+     */
+    suspend fun scanPublicMediaStore(): Int = scanMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val existingTracks = dao.getAllTracksOnce()
+            val existingBySourceKey = existingTracks.associateBy { it.sourceKey }
+            val existingByPath = existingTracks.associateBy { it.filePath.lowercase() }
+
+            val projectionList = mutableListOf(
                 MediaStore.Audio.Media._ID,
                 MediaStore.Audio.Media.TITLE,
                 MediaStore.Audio.Media.ARTIST,
                 MediaStore.Audio.Media.ALBUM,
                 MediaStore.Audio.Media.DURATION,
-                MediaStore.Audio.Media.DISPLAY_NAME
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.DATA,
+                MediaStore.Audio.Media.DATE_ADDED,
+                MediaStore.Audio.Media.IS_MUSIC,
+                MediaStore.Audio.Media.IS_RINGTONE,
+                MediaStore.Audio.Media.IS_NOTIFICATION,
+                MediaStore.Audio.Media.IS_ALARM,
+                MediaStore.Audio.Media.MIME_TYPE
             )
-            context.contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                null,
-                null,
-                null
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-                val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
-                val durCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                projectionList.add(MediaStore.Audio.Media.RELATIVE_PATH)
+            }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val title = cursor.getString(titleCol) ?: "Unknown Title"
-                    val artist = cursor.getString(artistCol) ?: "Unknown Artist"
-                    val album = cursor.getString(albumCol) ?: "Local Album"
-                    val duration = cursor.getLong(durCol).coerceAtLeast(30_000L)
-                    val displayName = cursor.getString(nameCol) ?: "$title.mp3"
-                    val ext = displayName.substringAfterLast('.', "mp3").lowercase()
-                    val contentUri = Uri.withAppendedPath(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        id.toString()
-                    )
-                    dao.insertTrack(
-                        TrackEntity(
-                            title = title,
-                            artist = artist,
-                            album = album,
-                            filePath = "/storage/emulated/0/Music/$displayName",
-                            uriString = contentUri.toString(),
-                            extension = ext,
-                            durationMs = duration,
-                            qualityBadge = "${ext.uppercase()} • Device Audio"
-                        )
-                    )
-                    count++
+            val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+            val sortOrder = "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
+
+            val seenMediaStoreIds = HashSet<Long>()
+            val seenPaths = HashSet<String>()
+            val scannedTracks = mutableListOf<TrackEntity>()
+            val scannedSourceKeys = HashSet<String>()
+
+            runCatching {
+                context.contentResolver.query(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    projectionList.toTypedArray(),
+                    selection,
+                    null,
+                    sortOrder
+                )?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                    val titleCol = cursor.getColumnIndex(MediaStore.Audio.Media.TITLE)
+                    val artistCol = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
+                    val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
+                    val durCol = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                    val nameCol = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+                    val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                    val dateAddedCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
+                    val isRingtoneCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_RINGTONE)
+                    val isNotificationCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_NOTIFICATION)
+                    val isAlarmCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_ALARM)
+                    val mimeCol = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                    val relPathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                    } else -1
+
+                    while (cursor.moveToNext()) {
+                        val msId = cursor.getLong(idCol)
+                        if (!seenMediaStoreIds.add(msId)) continue
+
+                        val isRingtone = if (isRingtoneCol >= 0) cursor.getInt(isRingtoneCol) != 0 else false
+                        val isNotification = if (isNotificationCol >= 0) cursor.getInt(isNotificationCol) != 0 else false
+                        val isAlarm = if (isAlarmCol >= 0) cursor.getInt(isAlarmCol) != 0 else false
+                        if (isRingtone || isNotification || isAlarm) continue
+
+                        val displayName = (if (nameCol >= 0) cursor.getString(nameCol) else null)?.trim()
+                        val rawDataPath = (if (dataCol >= 0) cursor.getString(dataCol) else null)?.trim()
+                        val relPath = (if (relPathCol >= 0) cursor.getString(relPathCol) else null)?.trim()
+                        val rawTitle = (if (titleCol >= 0) cursor.getString(titleCol) else null)?.trim()
+                        val rawArtist = (if (artistCol >= 0) cursor.getString(artistCol) else null)?.trim()
+                        val rawAlbum = (if (albumCol >= 0) cursor.getString(albumCol) else null)?.trim()
+                        val duration = if (durCol >= 0) cursor.getLong(durCol).coerceAtLeast(0L) else 0L
+                        val dateAddedSec = if (dateAddedCol >= 0) cursor.getLong(dateAddedCol) else 0L
+                        val mimeType = (if (mimeCol >= 0) cursor.getString(mimeCol) else null)?.lowercase() ?: ""
+
+                        val fileName = displayName
+                            ?: rawDataPath?.substringAfterLast('/')
+                            ?: "${rawTitle ?: "Track_$msId"}.mp3"
+
+                        val resolvedPath = when {
+                            !rawDataPath.isNullOrBlank() -> rawDataPath
+                            !relPath.isNullOrBlank() -> "/storage/emulated/0/${relPath.trimEnd('/')}/$fileName"
+                            else -> "/storage/emulated/0/Music/$fileName"
+                        }
+
+                        // Exclude system ringtones, notifications, and alarms by path as well
+                        if (VoiceNoteFilterEngine.isSystemAlertPath(resolvedPath)) continue
+
+                        val normalizedPathKey = resolvedPath.lowercase()
+                        if (!seenPaths.add(normalizedPathKey)) continue
+
+                        val ext = resolveExtension(fileName, resolvedPath, mimeType)
+                        val title = rawTitle?.takeIf { it.isNotBlank() && it != "<unknown>" }
+                            ?: fileName.substringBeforeLast('.')
+                        val artist = rawArtist?.takeIf { it.isNotBlank() && it != "<unknown>" }
+                            ?: "Unknown Artist"
+                        val album = rawAlbum?.takeIf { it.isNotBlank() && it != "<unknown>" }
+                            ?: "Unknown Album"
+                        val dateAddedMs = if (dateAddedSec > 0L) dateAddedSec * 1000L else System.currentTimeMillis()
+                        val contentUri = Uri.withAppendedPath(
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                            msId.toString()
+                        ).toString()
+
+                        val sourceKey = "ms_$msId"
+                        scannedSourceKeys.add(sourceKey)
+
+                        val existing = existingBySourceKey[sourceKey]
+                            ?: existingByPath[normalizedPathKey]
+
+                        val entity = if (existing != null) {
+                            existing.copy(
+                                sourceKey = sourceKey,
+                                mediaStoreId = msId,
+                                title = if (existing.tagsEdited) existing.title else title,
+                                artist = if (existing.tagsEdited) existing.artist else artist,
+                                album = if (existing.tagsEdited) existing.album else album,
+                                filePath = resolvedPath,
+                                uriString = contentUri,
+                                extension = ext,
+                                durationMs = duration.coerceAtLeast(1_000L),
+                                dateAdded = dateAddedMs,
+                                qualityBadge = ext.uppercase()
+                            )
+                        } else {
+                            TrackEntity(
+                                sourceKey = sourceKey,
+                                mediaStoreId = msId,
+                                title = title,
+                                artist = artist,
+                                album = album,
+                                filePath = resolvedPath,
+                                uriString = contentUri,
+                                extension = ext,
+                                durationMs = duration.coerceAtLeast(1_000L),
+                                dateAdded = dateAddedMs,
+                                qualityBadge = ext.uppercase()
+                            )
+                        }
+                        scannedTracks.add(entity)
+                    }
                 }
             }
+
+            // Identify any MediaStore tracks in DB that no longer exist on the device (or were duplicates)
+            val staleIds = existingTracks
+                .filter { existing ->
+                    existing.sourceKey.startsWith("ms_") && existing.sourceKey !in scannedSourceKeys
+                }
+                .map { it.id }
+
+            dao.syncMediaStoreTracks(
+                tracksToUpsert = scannedTracks,
+                staleTrackIds = staleIds
+            )
+
+            scannedTracks.size
         }
-        count
+    }
+
+    private fun resolveExtension(fileName: String, path: String, mimeType: String): String {
+        val fromName = fileName.substringAfterLast('.', "").lowercase()
+        if (fromName.isNotBlank() && fromName != fileName.lowercase()) return fromName
+        val fromPath = path.substringAfterLast('.', "").lowercase()
+        if (fromPath.isNotBlank() && fromPath != path.lowercase()) return fromPath
+        return when {
+            mimeType.contains("flac") -> "flac"
+            mimeType.contains("mp4") || mimeType.contains("m4a") || mimeType.contains("aac") -> "m4a"
+            mimeType.contains("mpeg") || mimeType.contains("mp3") -> "mp3"
+            mimeType.contains("opus") -> "opus"
+            mimeType.contains("ogg") -> "ogg"
+            else -> "mp3"
+        }
     }
 }

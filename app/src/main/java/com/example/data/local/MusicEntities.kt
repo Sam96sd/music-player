@@ -2,13 +2,21 @@ package com.example.data.local
 
 import androidx.room.Embedded
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Junction
 import androidx.room.PrimaryKey
 import androidx.room.Relation
 
-@Entity(tableName = "tracks")
+@Entity(
+    tableName = "tracks",
+    indices = [
+        Index(value = ["sourceKey"], unique = true)
+    ]
+)
 data class TrackEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sourceKey: String = "",
+    val mediaStoreId: Long? = null,
     val title: String,
     val artist: String,
     val album: String,
@@ -21,8 +29,9 @@ data class TrackEntity(
     val lastPlayedAt: Long = 0L,
     val isHidden: Boolean = false,
     val lyricOffsetMs: Long = 0L,
+    val tagsEdited: Boolean = false,
     val accentHex: String = "#00E5FF",
-    val qualityBadge: String = "FLAC • 96kHz"
+    val qualityBadge: String = "Audio"
 )
 
 @Entity(tableName = "saved_lyrics")

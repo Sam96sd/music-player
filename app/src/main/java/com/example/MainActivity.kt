@@ -1,5 +1,8 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -46,6 +49,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,10 +57,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.local.TrackEntity
@@ -88,22 +94,49 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                PulseWaveApp()
+                MuffinMusicApp()
             }
         }
     }
 }
 
 @Composable
-fun PulseWaveApp(
+fun MuffinMusicApp(
     viewModel: MusicPlayerViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     var trackForTagEdit by remember { mutableStateOf<TrackEntity?>(null) }
     var trackForDelete by remember { mutableStateOf<TrackEntity?>(null) }
     var trackForPlaylistAdd by remember { mutableStateOf<TrackEntity?>(null) }
     var showSleepTimerModal by remember { mutableStateOf(false) }
+
+    val requiredAudioPermission = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.onAudioPermissionResult(granted)
+    }
+
+    LaunchedEffect(Unit) {
+        val alreadyGranted = ContextCompat.checkSelfPermission(
+            context,
+            requiredAudioPermission
+        ) == PackageManager.PERMISSION_GRANTED
+        if (alreadyGranted) {
+            viewModel.onAudioPermissionResult(true)
+        } else {
+            audioPermissionLauncher.launch(requiredAudioPermission)
+        }
+    }
 
     val audioPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -113,7 +146,6 @@ fun PulseWaveApp(
         }
     }
 
-    // Handle system Back button when on non-home tabs
     if (state.activeTab != AppTab.LIBRARY) {
         BackHandler {
             viewModel.selectTab(AppTab.LIBRARY)
@@ -126,7 +158,6 @@ fun PulseWaveApp(
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Floating Mini-Player + Live Lyric Preview Bar when not on Player Tab
                 if (state.activeTab != AppTab.PLAYER_LYRICS && state.currentTrack != null) {
                     MiniPlayerBar(
                         state = state,
@@ -236,12 +267,13 @@ fun PulseWaveApp(
                     LibraryScreen(
                         tracks = state.visibleTracks,
                         blockedVoiceNotesCount = state.blockedVoiceNotes.size,
+                        hasAudioPermission = state.hasAudioPermission,
+                        isScanning = state.isScanning,
                         savedLyricsMap = state.savedLyricsMap,
                         currentTrackId = state.currentTrack?.id,
                         isPlaying = state.isPlaying,
                         filterSettings = state.filterSettings,
                         onSearchQueryChange = viewModel::updateSearchQuery,
-                        onSelectFormatChip = viewModel::selectFormatChip,
                         onPlayTrack = { track ->
                             viewModel.playTrack(track, openPlayerTab = false)
                         },
@@ -253,11 +285,18 @@ fun PulseWaveApp(
                         onOpenDeleteModal = { trackForDelete = it },
                         onOpenAddToPlaylist = { trackForPlaylistAdd = it },
                         onOpenVoiceShieldTab = { viewModel.selectTab(AppTab.VOICE_SHIELD) },
+                        onRequestAudioPermission = {
+                            audioPermissionLauncher.launch(requiredAudioPermission)
+                        },
                         onImportAudioFiles = {
                             audioPickerLauncher.launch(arrayOf("audio/*"))
                         },
                         onScanDeviceMedia = {
-                            viewModel.scanDeviceMediaStore()
+                            if (state.hasAudioPermission) {
+                                viewModel.scanDeviceMediaStore(silent = false)
+                            } else {
+                                audioPermissionLauncher.launch(requiredAudioPermission)
+                            }
                         }
                     )
                 }
@@ -324,7 +363,6 @@ fun PulseWaveApp(
                 }
             }
 
-            // Transient Studio Status Toast Banner
             AnimatedVisibility(
                 visible = state.statusBannerMessage != null,
                 modifier = Modifier
@@ -349,7 +387,6 @@ fun PulseWaveApp(
         }
     }
 
-    // Online Lyrics Search & Top 2-3 Websites Preview Modal
     if (state.lyricsSearch.isSheetOpen) {
         OnlineLyricsSearchDialog(
             state = state.lyricsSearch,
@@ -361,7 +398,6 @@ fun PulseWaveApp(
         )
     }
 
-    // Quick Tag Editor Modal
     if (trackForTagEdit != null) {
         val target = trackForTagEdit!!
         QuickTagEditorDialog(
@@ -373,7 +409,6 @@ fun PulseWaveApp(
         )
     }
 
-    // Dual-Option Remove / Delete Modal
     if (trackForDelete != null) {
         val target = trackForDelete!!
         DualModeDeleteDialog(
@@ -384,7 +419,6 @@ fun PulseWaveApp(
         )
     }
 
-    // Add to Playlist Modal
     if (trackForPlaylistAdd != null) {
         val target = trackForPlaylistAdd!!
         AddToPlaylistDialog(
@@ -400,7 +434,6 @@ fun PulseWaveApp(
         )
     }
 
-    // Sleep Timer Modal
     if (showSleepTimerModal) {
         SleepTimerDialog(
             state = state.sleepTimer,

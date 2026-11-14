@@ -9,8 +9,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MusicDao {
-    @Query("SELECT * FROM tracks ORDER BY title ASC")
+    @Query("SELECT * FROM tracks ORDER BY title COLLATE NOCASE ASC")
     fun observeAllTracks(): Flow<List<TrackEntity>>
+
+    @Query("SELECT * FROM tracks")
+    suspend fun getAllTracksOnce(): List<TrackEntity>
 
     @Query("SELECT COUNT(*) FROM tracks")
     suspend fun getTrackCount(): Int
@@ -21,7 +24,7 @@ interface MusicDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTrack(track: TrackEntity): Long
 
-    @Query("UPDATE tracks SET title = :title, artist = :artist, album = :album WHERE id = :trackId")
+    @Query("UPDATE tracks SET title = :title, artist = :artist, album = :album, tagsEdited = 1 WHERE id = :trackId")
     suspend fun updateTrackTags(trackId: Long, title: String, artist: String, album: String)
 
     @Query("UPDATE tracks SET isHidden = :isHidden WHERE id = :trackId")
@@ -36,11 +39,35 @@ interface MusicDao {
     @Query("DELETE FROM tracks WHERE id = :trackId")
     suspend fun deleteTrackById(trackId: Long)
 
+    @Query("DELETE FROM tracks WHERE id IN (:trackIds)")
+    suspend fun deleteTracksByIds(trackIds: List<Long>)
+
     @Query("DELETE FROM playlist_track_cross_ref WHERE trackId = :trackId")
     suspend fun removeTrackFromAllPlaylists(trackId: Long)
 
+    @Query("DELETE FROM playlist_track_cross_ref WHERE trackId IN (:trackIds)")
+    suspend fun removeTracksFromAllPlaylists(trackIds: List<Long>)
+
     @Query("DELETE FROM saved_lyrics WHERE trackId = :trackId")
     suspend fun deleteLyricsForTrack(trackId: Long)
+
+    @Query("DELETE FROM saved_lyrics WHERE trackId IN (:trackIds)")
+    suspend fun deleteLyricsForTracks(trackIds: List<Long>)
+
+    @Transaction
+    suspend fun syncMediaStoreTracks(
+        tracksToUpsert: List<TrackEntity>,
+        staleTrackIds: List<Long>
+    ) {
+        if (staleTrackIds.isNotEmpty()) {
+            removeTracksFromAllPlaylists(staleTrackIds)
+            deleteLyricsForTracks(staleTrackIds)
+            deleteTracksByIds(staleTrackIds)
+        }
+        if (tracksToUpsert.isNotEmpty()) {
+            insertTracks(tracksToUpsert)
+        }
+    }
 
     // Lyrics
     @Query("SELECT * FROM saved_lyrics")
