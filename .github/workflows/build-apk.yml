@@ -1,0 +1,74 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Android project exists
+        id: check
+        run: |
+          if [ -f settings.gradle.kts ] || [ -f settings.gradle ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Android project in the repo yet - skipping build."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+          V=8.13
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            P=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | sed -E 's/.*gradle-([0-9.]+)-(bin|all)\.zip.*/\1/')
+            [ -n "$P" ] && V="$P"
+          fi
+          echo "gradle=$V" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.ok == 'true'
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            17
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.check.outputs.ok == 'true'
+        with:
+          gradle-version: ${{ steps.check.outputs.gradle }}
+
+      - name: Use fixed signing key (so updates install over the old version)
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          mkdir -p ~/.android
+          if [ -f .github/debug.keystore.b64 ]; then
+            base64 -d .github/debug.keystore.b64 > ~/.android/debug.keystore
+          fi
+
+      - name: Build APK
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
+          mkdir -p out
+          cp "$(find app/build/outputs/apk -name '*.apk' | head -n 1)" "out/PulseWave-v${{ github.run_number }}.apk"
+
+      - name: Publish release
+        if: steps.check.outputs.ok == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: PulseWave v${{ github.run_number }}
+          body: "Built from ${{ github.sha }}"
+          files: out/*.apk
+          make_latest: true
