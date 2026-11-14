@@ -27,6 +27,9 @@ interface MusicDao {
     @Query("UPDATE tracks SET title = :title, artist = :artist, album = :album, tagsEdited = 1 WHERE id = :trackId")
     suspend fun updateTrackTags(trackId: Long, title: String, artist: String, album: String)
 
+    @Query("UPDATE tracks SET customSearchTitle = :customTitle, customSearchArtist = :customArtist WHERE id = :trackId")
+    suspend fun updateCustomLyricsSearchQuery(trackId: Long, customTitle: String?, customArtist: String?)
+
     @Query("UPDATE tracks SET isHidden = :isHidden WHERE id = :trackId")
     suspend fun setTrackHidden(trackId: Long, isHidden: Boolean)
 

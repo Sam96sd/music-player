@@ -2,10 +2,15 @@ package com.example
 
 import com.example.data.local.BlacklistedFolderEntity
 import com.example.data.local.TrackEntity
+import com.example.data.network.OnlineLyricCandidate
+import com.example.domain.ArabiziTransliterator
 import com.example.domain.LrcParser
+import com.example.domain.LyricsLinkExtractor
+import com.example.domain.LyricsMatcher
 import com.example.domain.VoiceNoteFilterEngine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -34,7 +39,6 @@ class ExampleUnitTest {
         )
         assertTrue(VoiceNoteFilterEngine.evaluateTrack(flacSong, rules).isAllowed)
 
-        // Even a 20-minute .m4a WhatsApp voice note is blocked by PTT/AUD heuristic & folder rule
         val longWhatsappM4a = TrackEntity(
             id = 2,
             title = "AUD-20261114-WA0019",
@@ -47,7 +51,6 @@ class ExampleUnitTest {
         )
         assertFalse(VoiceNoteFilterEngine.evaluateTrack(longWhatsappM4a, rules).isAllowed)
 
-        // Ringtones and alarms are always excluded
         val ringtone = TrackEntity(
             id = 3,
             title = "Morning Bell",
@@ -75,10 +78,144 @@ class ExampleUnitTest {
         assertEquals(3, parsed.lines.size)
         assertEquals(6500L, parsed.lines[1].timestampMs)
 
-        // At 6200ms with 0ms offset, active line is index 0
         assertEquals(0, LrcParser.findActiveLineIndex(parsed.lines, 6200L, 0L))
-
-        // With -500ms offset (advancing lyrics by 0.5s so line 1 triggers at 6000ms), active line is index 1
         assertEquals(1, LrcParser.findActiveLineIndex(parsed.lines, 6200L, -500L))
+    }
+
+    @Test
+    fun lyricsMatcher_normalizesArabicAndLatinAndRejectsWrongSongsOrDuration() {
+        // Normalization: diacritics, tatweel, أ إ آ -> ا, ة -> ه, ى -> ي, noise words
+        val normalizedAr = LyricsMatcher.normalizeForMatch("أَهْـلاً بِكُمْ فِي المَدِينَة (Official Video) [Lyrics]")
+        assertEquals("اهلا بكم في المدينه", normalizedAr)
+        assertEquals("علي", LyricsMatcher.normalizeForMatch("عَلَى"))
+
+        val validCandidate = OnlineLyricCandidate(
+            id = "c1",
+            providerName = "LRCLIB.net",
+            providerUrl = "lrclib.net",
+            trackTitle = "Blinding Lights (Official Audio)",
+            artistName = "The Weeknd",
+            isSynced = true,
+            rawLyrics = "[00:10.00] Yeah, I've been tryna call",
+            matchConfidence = "Synced",
+            durationSec = 202.0 // within ±7s of 200_000ms
+        )
+        assertTrue(
+            LyricsMatcher.verifyCandidate(
+                trackTitle = "Blinding Lights",
+                trackArtist = "The Weeknd",
+                trackDurationMs = 200_000L,
+                candidate = validCandidate
+            )
+        )
+
+        // Duration off by 12s (> 7s tolerance) must be rejected
+        val wrongDuration = validCandidate.copy(durationSec = 212.0)
+        assertFalse(
+            LyricsMatcher.verifyCandidate(
+                trackTitle = "Blinding Lights",
+                trackArtist = "The Weeknd",
+                trackDurationMs = 200_000L,
+                candidate = wrongDuration
+            )
+        )
+
+        // Wrong artist must be rejected even if title matches
+        val wrongArtist = validCandidate.copy(artistName = "Random Cover Band")
+        assertFalse(
+            LyricsMatcher.verifyCandidate(
+                trackTitle = "Blinding Lights",
+                trackArtist = "The Weeknd",
+                trackDurationMs = 200_000L,
+                candidate = wrongArtist
+            )
+        )
+
+        // Wrong song title must be rejected even if artist matches
+        val wrongTitle = validCandidate.copy(trackTitle = "Starboy")
+        assertFalse(
+            LyricsMatcher.verifyCandidate(
+                trackTitle = "Blinding Lights",
+                trackArtist = "The Weeknd",
+                trackDurationMs = 200_000L,
+                candidate = wrongTitle
+            )
+        )
+    }
+
+    @Test
+    fun arabiziTransliterator_generatesArabicCandidatesAndVerifiesCrossScript() {
+        val candidates = ArabiziTransliterator.generateArabicCandidates("ala bab alsema")
+        assertTrue(candidates.any { it.contains("على") && it.contains("باب") && it.contains("السيما") })
+
+        val digitCandidates = ArabiziTransliterator.generateArabicCandidates("3a2el 7abibi")
+        assertTrue(digitCandidates.isNotEmpty())
+        assertTrue(digitCandidates.first().contains('ع'))
+        assertTrue(digitCandidates.first().contains('ح'))
+        assertTrue(digitCandidates.first().contains('ء'))
+
+        val arabicLrclibHit = OnlineLyricCandidate(
+            id = "ar1",
+            providerName = "LRCLIB.net",
+            providerUrl = "lrclib.net",
+            trackTitle = "على باب السيما",
+            artistName = "عمرو دياب",
+            isSynced = true,
+            rawLyrics = "[00:15.00] على باب السيما",
+            matchConfidence = "Synced",
+            durationSec = 235.0
+        )
+
+        assertTrue(
+            LyricsMatcher.verifyCandidate(
+                trackTitle = "Ala Bab Alsema",
+                trackArtist = "Amr Diab",
+                trackDurationMs = 232_000L,
+                candidate = arabicLrclibHit,
+                arabicTitleCandidates = candidates,
+                arabicArtistCandidates = ArabiziTransliterator.generateArabicCandidates("Amr Diab")
+            )
+        )
+
+        // Completely unrelated Arabic song by same artist should still be rejected
+        val wrongArabicSong = arabicLrclibHit.copy(trackTitle = "تملي معاك")
+        assertFalse(
+            LyricsMatcher.verifyCandidate(
+                trackTitle = "Ala Bab Alsema",
+                trackArtist = "Amr Diab",
+                trackDurationMs = 232_000L,
+                candidate = wrongArabicSong,
+                arabicTitleCandidates = candidates,
+                arabicArtistCandidates = ArabiziTransliterator.generateArabicCandidates("Amr Diab")
+            )
+        )
+    }
+
+    @Test
+    fun lyricsLinkExtractor_resolvesLrclibAndExtractsHtmlLyrics() {
+        assertEquals(
+            "https://lrclib.net/api/get/98765",
+            LyricsLinkExtractor.resolveFetchUrl("https://lrclib.net/tracks/98765")
+        )
+        assertTrue(LyricsLinkExtractor.isLrclibUrl("https://lrclib.net/tracks/98765"))
+
+        val sampleHtml = """
+            <html>
+              <head><style>.nav{}</style></head>
+              <body>
+                <nav><a href="/">Home</a><a href="/top">Top</a></nav>
+                <div data-lyrics-container="true">
+                  Line one of the verse<br/>
+                  Line two of the verse<br/>
+                  Line three of the chorus<br/>
+                  Line four keeps going strong
+                </div>
+              </body>
+            </html>
+        """.trimIndent()
+        val extracted = LyricsLinkExtractor.extractLyricsFromHtml(sampleHtml)
+        assertNotNull(extracted)
+        assertTrue(extracted!!.contains("Line one of the verse"))
+        assertFalse(extracted.contains("Home"))
     }
 }

@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -64,10 +66,12 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.PlaylistWithTracks
 import com.example.data.local.TrackEntity
 import com.example.data.network.OnlineLyricCandidate
+import com.example.ui.LinkLyricsUiState
 import com.example.ui.LyricsSearchUiState
 import com.example.ui.SleepTimerState
 import com.example.ui.theme.CrimsonDanger
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.MutedSage
 import com.example.ui.theme.OledCarbon
 import com.example.ui.theme.SignalMint
 import com.example.ui.theme.StudioBorder
@@ -168,6 +172,15 @@ fun OnlineLyricsSearchDialog(
                     )
                 }
 
+                if (state.hasRememberedQuery) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Remembered custom title/artist for this song (used for future searches too)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MutedSage
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Button(
@@ -187,7 +200,7 @@ fun OnlineLyricsSearchDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Search Top Lyric Providers",
+                        text = "Search & Remember Title/Artist",
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -209,7 +222,7 @@ fun OnlineLyricsSearchDialog(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Querying LRCLIB.net, OpenLRC & Lyrics.ovh…",
+                            text = "Searching & verifying LRCLIB, Lyrics.ovh, Lyrist & Arabizi matches…",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
@@ -873,3 +886,256 @@ fun BulkDeleteConfirmationDialog(
         }
     )
 }
+
+@Composable
+fun PasteLyricsLinkDialog(
+    state: LinkLyricsUiState,
+    onUrlChanged: (String) -> Unit,
+    onFetchClicked: () -> Unit,
+    onPreviewTextChanged: (String) -> Unit,
+    onSaveOffline: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, StudioBorder, RoundedCornerShape(24.dp)),
+            color = StudioSlate
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Link,
+                            contentDescription = "Paste lyrics link",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Paste Lyrics Link",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = state.targetTrack?.title.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = TextSecondary
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Paste an LRCLIB link (loads directly) or any lyrics webpage URL to extract and preview lyrics before saving offline.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+
+                OutlinedTextField(
+                    value = state.urlInput,
+                    onValueChange = onUrlChanged,
+                    label = { Text("Lyrics or LRCLIB URL") },
+                    placeholder = { Text("https://lrclib.net/tracks/... or https://...") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("paste_lyrics_link_input")
+                )
+
+                Button(
+                    onClick = onFetchClicked,
+                    enabled = !state.isLoading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("fetch_lyrics_link_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ElectricCyan,
+                        contentColor = OledCarbon
+                    )
+                ) {
+                    if (state.isLoading) {
+                        CircularProgressIndicator(
+                            color = OledCarbon,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Fetching…", fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.CloudDownload,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Fetch & Preview", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (state.errorMessage != null) {
+                    Text(
+                        text = state.errorMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = CrimsonDanger
+                    )
+                }
+
+                if (state.hasPreview) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "PREVIEW (${state.sourceLabel})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    if (state.isSynced) MutedSage.copy(alpha = 0.2f)
+                                    else WarmAmber.copy(alpha = 0.2f)
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = if (state.isSynced) "SYNCED LRC" else "PLAIN TEXT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (state.isSynced) MutedSage else WarmAmber
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = state.previewText,
+                        onValueChange = onPreviewTextChanged,
+                        minLines = 6,
+                        maxLines = 10,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("paste_lyrics_link_preview_input")
+                    )
+
+                    Button(
+                        onClick = onSaveOffline,
+                        enabled = state.previewText.isNotBlank(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("save_link_lyrics_offline_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MutedSage,
+                            contentColor = OledCarbon
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Save Offline", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PasteLyricsTextDialog(
+    track: TrackEntity,
+    existingRawLyrics: String,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var rawInput by remember(track.id) { mutableStateOf(existingRawLyrics) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = StudioSlate,
+        titleContentColor = TextPrimary,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.EditNote,
+                contentDescription = "Paste lyrics text",
+                tint = ElectricCyan
+            )
+        },
+        title = {
+            Text(
+                text = "Paste Lyrics Text",
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "${track.title} — ${track.artist}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = ElectricCyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Supports [mm:ss.xx] synced LRC lines or plain text:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+                OutlinedTextField(
+                    value = rawInput,
+                    onValueChange = { rawInput = it },
+                    minLines = 6,
+                    maxLines = 10,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("paste_lyrics_text_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(rawInput)
+                    onDismiss()
+                },
+                enabled = rawInput.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MutedSage,
+                    contentColor = OledCarbon
+                ),
+                modifier = Modifier.testTag("save_pasted_lyrics_text_button")
+            ) {
+                Text("Save Offline", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        }
+    )
+}
+

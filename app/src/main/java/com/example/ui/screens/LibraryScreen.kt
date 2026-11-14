@@ -28,9 +28,12 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MoreVert
@@ -116,6 +119,9 @@ fun LibraryScreen(
     onBulkFetchLyrics: () -> Unit,
     onAutoFetchLyrics: (TrackEntity) -> Unit,
     onOpenManualLyricsPicker: (TrackEntity) -> Unit,
+    onOpenPasteLyricsLink: (TrackEntity) -> Unit,
+    onOpenPasteLyricsText: (TrackEntity) -> Unit,
+    onImportLrcFile: (TrackEntity) -> Unit,
     onFetchAllMissingLyrics: () -> Unit,
     onCancelBatchLyrics: () -> Unit,
     onOpenQuickTagEditor: (TrackEntity) -> Unit,
@@ -672,6 +678,9 @@ fun LibraryScreen(
                     },
                     onAutoFetchLyricsClick = { onAutoFetchLyrics(track) },
                     onManualLyricsPickerClick = { onOpenManualLyricsPicker(track) },
+                    onPasteLyricsLinkClick = { onOpenPasteLyricsLink(track) },
+                    onPasteLyricsTextClick = { onOpenPasteLyricsText(track) },
+                    onImportLrcFileClick = { onImportLrcFile(track) },
                     onEditTagsClick = { onOpenQuickTagEditor(track) },
                     onDeleteClick = { onOpenDeleteModal(track) },
                     onAddToPlaylistClick = { onOpenAddToPlaylist(track) }
@@ -732,6 +741,9 @@ private fun CompactTrackRowCard(
     onRowLongClick: () -> Unit,
     onAutoFetchLyricsClick: () -> Unit,
     onManualLyricsPickerClick: () -> Unit,
+    onPasteLyricsLinkClick: () -> Unit,
+    onPasteLyricsTextClick: () -> Unit,
+    onImportLrcFileClick: () -> Unit,
     onEditTagsClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onAddToPlaylistClick: () -> Unit
@@ -917,6 +929,48 @@ private fun CompactTrackRowCard(
                             onClick = {
                                 menuExpanded = false
                                 onManualLyricsPickerClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Paste lyrics link", color = TextPrimary) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Link,
+                                    contentDescription = null,
+                                    tint = ElectricCyan
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onPasteLyricsLinkClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Paste lyrics text", color = TextPrimary) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.EditNote,
+                                    contentDescription = null,
+                                    tint = MutedSlateBlue
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onPasteLyricsTextClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Import .lrc file", color = TextPrimary) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.FileOpen,
+                                    contentDescription = null,
+                                    tint = MutedSage
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onImportLrcFileClick()
                             }
                         )
                         DropdownMenuItem(

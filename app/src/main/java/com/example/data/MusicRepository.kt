@@ -128,12 +128,59 @@ class MusicRepository(
         dao.incrementPlayCount(trackId)
     }
 
-    suspend fun fetchFirstAvailableLyrics(title: String, artist: String): OnlineLyricCandidate? {
-        return lyricsClient.fetchFirstAvailableLyrics(title, artist)
+    suspend fun updateCustomLyricsSearchQuery(trackId: Long, customTitle: String?, customArtist: String?) {
+        dao.updateCustomLyricsSearchQuery(
+            trackId = trackId,
+            customTitle = customTitle?.trim()?.takeIf { it.isNotEmpty() },
+            customArtist = customArtist?.trim()?.takeIf { it.isNotEmpty() }
+        )
     }
 
-    suspend fun searchOnlineLyrics(title: String, artist: String): List<OnlineLyricCandidate> {
-        return lyricsClient.searchTopProviders(title, artist)
+    suspend fun fetchFirstAvailableLyrics(track: TrackEntity): OnlineLyricCandidate? {
+        val qTitle = track.customSearchTitle?.takeIf { it.isNotBlank() } ?: track.title
+        val qArtist = track.customSearchArtist?.takeIf { it.isNotBlank() } ?: track.artist
+        return lyricsClient.fetchFirstVerifiedLyrics(
+            trackTitle = track.title,
+            trackArtist = track.artist,
+            trackDurationMs = track.durationMs,
+            queryTitle = qTitle,
+            queryArtist = qArtist
+        )
+    }
+
+    suspend fun searchOnlineLyrics(
+        track: TrackEntity,
+        queryTitle: String,
+        queryArtist: String
+    ): List<OnlineLyricCandidate> {
+        return lyricsClient.searchVerifiedTopProviders(
+            trackTitle = track.title,
+            trackArtist = track.artist,
+            trackDurationMs = track.durationMs,
+            queryTitle = queryTitle,
+            queryArtist = queryArtist
+        )
+    }
+
+    suspend fun fetchLyricsFromUrl(url: String): Result<OnlineLyricCandidate> {
+        return lyricsClient.fetchLyricsFromUrl(url)
+    }
+
+    suspend fun readLrcTextFromUri(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val stream = context.contentResolver.openInputStream(uri)
+                ?: error("Unable to open selected file")
+            val bytes = stream.use { it.readBytes() }
+            val text = when {
+                bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() ->
+                    String(bytes, Charsets.UTF_16LE)
+                bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() ->
+                    String(bytes, Charsets.UTF_16BE)
+                else -> String(bytes, Charsets.UTF_8).removePrefix("\uFEFF")
+            }.trim()
+            require(text.isNotBlank()) { "Selected file is empty" }
+            text
+        }
     }
 
     suspend fun saveLyricsOffline(

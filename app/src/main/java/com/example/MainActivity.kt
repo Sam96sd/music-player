@@ -73,6 +73,8 @@ import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.BulkDeleteConfirmationDialog
 import com.example.ui.components.DualModeDeleteDialog
 import com.example.ui.components.OnlineLyricsSearchDialog
+import com.example.ui.components.PasteLyricsLinkDialog
+import com.example.ui.components.PasteLyricsTextDialog
 import com.example.ui.components.QuickTagEditorDialog
 import com.example.ui.components.SleepTimerDialog
 import com.example.ui.screens.LibraryScreen
@@ -110,6 +112,8 @@ fun MuffinMusicApp(
 
     var trackForTagEdit by remember { mutableStateOf<TrackEntity?>(null) }
     var trackForDelete by remember { mutableStateOf<TrackEntity?>(null) }
+    var trackForManualLyricsPaste by remember { mutableStateOf<TrackEntity?>(null) }
+    var pendingLrcImportTrackId by remember { mutableStateOf<Long?>(null) }
     var tracksForPlaylistAdd by remember { mutableStateOf<Pair<String, List<Long>>?>(null) }
     var showBulkDeleteConfirm by remember { mutableStateOf(false) }
     var showSleepTimerModal by remember { mutableStateOf(false) }
@@ -145,6 +149,16 @@ fun MuffinMusicApp(
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importExternalAudioUris(uris)
+        }
+    }
+
+    val lrcPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val targetId = pendingLrcImportTrackId
+        pendingLrcImportTrackId = null
+        if (uri != null && targetId != null) {
+            viewModel.importLrcFileForTrack(targetId, uri)
         }
     }
 
@@ -306,6 +320,12 @@ fun MuffinMusicApp(
                         onBulkFetchLyrics = viewModel::fetchLyricsForSelectedTracks,
                         onAutoFetchLyrics = viewModel::autoFetchLyricsForTrack,
                         onOpenManualLyricsPicker = viewModel::openLyricsSearchModal,
+                        onOpenPasteLyricsLink = viewModel::openLinkLyricsModal,
+                        onOpenPasteLyricsText = { trackForManualLyricsPaste = it },
+                        onImportLrcFile = { track ->
+                            pendingLrcImportTrackId = track.id
+                            lrcPickerLauncher.launch(arrayOf("*/*"))
+                        },
                         onFetchAllMissingLyrics = viewModel::fetchAllMissingLyrics,
                         onCancelBatchLyrics = viewModel::cancelBatchLyricsFetch,
                         onOpenQuickTagEditor = { trackForTagEdit = it },
@@ -427,6 +447,30 @@ fun MuffinMusicApp(
             onSelectCandidate = viewModel::selectLyricCandidate,
             onSaveCandidateOffline = viewModel::saveCandidateLyricsToDevice,
             onDismiss = viewModel::closeLyricsSearchModal
+        )
+    }
+
+    if (state.linkLyrics.isSheetOpen) {
+        PasteLyricsLinkDialog(
+            state = state.linkLyrics,
+            onUrlChanged = viewModel::updateLinkLyricsUrl,
+            onFetchClicked = viewModel::fetchLyricsFromLink,
+            onPreviewTextChanged = viewModel::updateLinkLyricsPreviewText,
+            onSaveOffline = viewModel::saveLinkLyricsOffline,
+            onDismiss = viewModel::closeLinkLyricsModal
+        )
+    }
+
+    if (trackForManualLyricsPaste != null) {
+        val target = trackForManualLyricsPaste!!
+        val existingLyrics = state.savedLyricsMap[target.id]?.rawLyrics.orEmpty()
+        PasteLyricsTextDialog(
+            track = target,
+            existingRawLyrics = existingLyrics,
+            onSave = { rawText ->
+                viewModel.saveManualLyricsForTrack(target.id, rawText)
+            },
+            onDismiss = { trackForManualLyricsPaste = null }
         )
     }
 

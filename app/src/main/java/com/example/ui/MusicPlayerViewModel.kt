@@ -61,8 +61,21 @@ data class LyricsSearchUiState(
     val targetTrackId: Long? = null,
     val queryTitle: String = "",
     val queryArtist: String = "",
+    val hasRememberedQuery: Boolean = false,
     val candidates: List<OnlineLyricCandidate> = emptyList(),
     val selectedCandidateId: String? = null,
+    val errorMessage: String? = null
+)
+
+data class LinkLyricsUiState(
+    val isSheetOpen: Boolean = false,
+    val targetTrack: TrackEntity? = null,
+    val urlInput: String = "",
+    val isLoading: Boolean = false,
+    val hasPreview: Boolean = false,
+    val previewText: String = "",
+    val sourceLabel: String = "",
+    val isSynced: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -104,6 +117,7 @@ data class MusicPlayerUiState(
     val filterSettings: FilterSettingsState = FilterSettingsState(),
     val sleepTimer: SleepTimerState = SleepTimerState(),
     val lyricsSearch: LyricsSearchUiState = LyricsSearchUiState(),
+    val linkLyrics: LinkLyricsUiState = LinkLyricsUiState(),
     val statusBannerMessage: String? = null
 ) {
     val isSelectionMode: Boolean get() = selectedTrackIds.isNotEmpty()
@@ -131,6 +145,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private val _filterSettings = MutableStateFlow(FilterSettingsState())
     private val _sleepTimer = MutableStateFlow(SleepTimerState())
     private val _lyricsSearch = MutableStateFlow(LyricsSearchUiState())
+    private val _linkLyrics = MutableStateFlow(LinkLyricsUiState())
     private val _statusBanner = MutableStateFlow<String?>(null)
 
     private var mediaPlayer: MediaPlayer? = null
@@ -185,7 +200,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         val statusBanner: String?,
         val selectedIds: Set<Long>,
         val fetchingIds: Set<Long>,
-        val batchLyrics: BatchLyricsProgress
+        val batchLyrics: BatchLyricsProgress,
+        val linkLyrics: LinkLyricsUiState
     )
 
     private val metaFlow = combine(
@@ -195,9 +211,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         _selectedTrackIds,
         _fetchingTrackIds
     ) { perm, scanning, banner, selected, fetching ->
-        MetaSnapshot(perm, scanning, banner, selected, fetching, BatchLyricsProgress())
+        MetaSnapshot(perm, scanning, banner, selected, fetching, BatchLyricsProgress(), LinkLyricsUiState())
     }.combine(_batchLyrics) { meta, batch ->
         meta.copy(batchLyrics = batch)
+    }.combine(_linkLyrics) { meta, linkState ->
+        meta.copy(linkLyrics = linkState)
     }
 
     val uiState: StateFlow<MusicPlayerUiState> = combine(
@@ -299,7 +317,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             statusBannerMessage = meta.statusBanner,
             selectedTrackIds = meta.selectedIds.intersect(visibleIdSet),
             fetchingTrackIds = meta.fetchingIds,
-            batchLyrics = meta.batchLyrics
+            batchLyrics = meta.batchLyrics,
+            linkLyrics = meta.linkLyrics
         )
     }.stateIn(
         scope = viewModelScope,
@@ -574,7 +593,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             _fetchingTrackIds.update { it + track.id }
             val candidate = runCatching {
-                repository.fetchFirstAvailableLyrics(track.title, track.artist)
+                repository.fetchFirstAvailableLyrics(track)
             }.getOrNull()
             if (candidate != null) {
                 repository.saveLyricsOffline(
@@ -585,7 +604,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 )
                 showBanner("Saved lyrics for \"${track.title}\" (${candidate.providerName})")
             } else {
-                showBanner("No online lyrics found for \"${track.title}\"")
+                showBanner("No matching lyrics found for \"${track.title}\"")
             }
             _fetchingTrackIds.update { it - track.id }
         }
@@ -632,7 +651,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     }
                     _fetchingTrackIds.update { it + track.id }
                     val candidate = runCatching {
-                        repository.fetchFirstAvailableLyrics(track.title, track.artist)
+                        repository.fetchFirstAvailableLyrics(track)
                     }.getOrNull()
                     if (candidate != null) {
                         repository.saveLyricsOffline(
@@ -651,7 +670,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         )
                     }
                 }
-                showBanner("Fetched lyrics for $saved of ${tracks.size} song(s)")
+                if (saved == 0) {
+                    showBanner("No matching lyrics found")
+                } else {
+                    showBanner("Fetched lyrics for $saved of ${tracks.size} song(s)")
+                }
             } catch (_: CancellationException) {
                 showBanner("Lyrics batch cancelled ($saved saved)")
             } finally {
@@ -668,15 +691,19 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     // Manual "Choose another version" Online Lyrics Picker (NEVER triggers playback)
     fun openLyricsSearchModal(track: TrackEntity? = uiState.value.currentTrack) {
         val target = track ?: return
-        val cleanArtist = if (target.artist == "Unknown Artist") "" else target.artist
+        val cleanArtist = if (target.artist == "Unknown Artist" || target.artist == "<unknown>") "" else target.artist
+        val initialTitle = target.customSearchTitle?.takeIf { it.isNotBlank() } ?: target.title
+        val initialArtist = target.customSearchArtist?.takeIf { it.isNotBlank() } ?: cleanArtist
+        val hasCustom = !target.customSearchTitle.isNullOrBlank() || !target.customSearchArtist.isNullOrBlank()
         _lyricsSearch.value = LyricsSearchUiState(
             isSheetOpen = true,
             isSearching = true,
             targetTrackId = target.id,
-            queryTitle = target.title,
-            queryArtist = cleanArtist
+            queryTitle = initialTitle,
+            queryArtist = initialArtist,
+            hasRememberedQuery = hasCustom
         )
-        executeOnlineLyricsSearch(target.title, cleanArtist)
+        executeOnlineLyricsSearch(initialTitle, initialArtist)
     }
 
     fun updateLyricsSearchQuery(title: String, artist: String) {
@@ -689,17 +716,47 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         title: String = _lyricsSearch.value.queryTitle,
         artist: String = _lyricsSearch.value.queryArtist
     ) {
+        val targetId = _lyricsSearch.value.targetTrackId
+        val targetTrack = findTrackById(targetId) ?: uiState.value.currentTrack ?: return
         viewModelScope.launch {
             _lyricsSearch.update { it.copy(isSearching = true, errorMessage = null) }
+
+            // Remember user-edited search title / artist (e.g. Arabic title) for this song
+            val cleanOrigArtist = if (targetTrack.artist == "Unknown Artist" || targetTrack.artist == "<unknown>") {
+                ""
+            } else {
+                targetTrack.artist
+            }
+            val editedTitle = title.trim()
+            val editedArtist = artist.trim()
+            val customTitleToStore = editedTitle.takeIf { it.isNotBlank() && it != targetTrack.title }
+            val customArtistToStore = editedArtist.takeIf { it.isNotBlank() && it != cleanOrigArtist }
+            val hasCustom = customTitleToStore != null || customArtistToStore != null
+
+            if (customTitleToStore != targetTrack.customSearchTitle ||
+                customArtistToStore != targetTrack.customSearchArtist
+            ) {
+                repository.updateCustomLyricsSearchQuery(
+                    trackId = targetTrack.id,
+                    customTitle = customTitleToStore,
+                    customArtist = customArtistToStore
+                )
+            }
+
             runCatching {
-                repository.searchOnlineLyrics(title, artist)
+                repository.searchOnlineLyrics(targetTrack, title, artist)
             }.onSuccess { results ->
                 _lyricsSearch.update {
                     it.copy(
                         isSearching = false,
+                        hasRememberedQuery = hasCustom,
                         candidates = results,
                         selectedCandidateId = results.firstOrNull()?.id,
-                        errorMessage = if (results.isEmpty()) "No lyrics found online. Try adjusting the song title or artist." else null
+                        errorMessage = if (results.isEmpty()) {
+                            "No matching lyrics found"
+                        } else {
+                            null
+                        }
                     )
                 }
             }.onFailure { err ->
@@ -713,6 +770,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    private fun findTrackById(trackId: Long?): TrackEntity? {
+        if (trackId == null) return null
+        return uiState.value.visibleTracks.find { it.id == trackId }
+            ?: uiState.value.hiddenTracks.find { it.id == trackId }
+            ?: uiState.value.currentTrack?.takeIf { it.id == trackId }
+    }
+
     fun selectLyricCandidate(candidateId: String) {
         _lyricsSearch.update { it.copy(selectedCandidateId = candidateId) }
     }
@@ -723,7 +787,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun saveCandidateLyricsToDevice(candidate: OnlineLyricCandidate) {
         val targetId = _lyricsSearch.value.targetTrackId ?: uiState.value.currentTrack?.id ?: return
+        val targetTrack = findTrackById(targetId)
         viewModelScope.launch {
+            if (targetTrack != null) {
+                val cleanOrigArtist = if (targetTrack.artist == "Unknown Artist" || targetTrack.artist == "<unknown>") {
+                    ""
+                } else {
+                    targetTrack.artist
+                }
+                val qTitle = _lyricsSearch.value.queryTitle.trim()
+                val qArtist = _lyricsSearch.value.queryArtist.trim()
+                repository.updateCustomLyricsSearchQuery(
+                    trackId = targetTrack.id,
+                    customTitle = qTitle.takeIf { it.isNotBlank() && it != targetTrack.title },
+                    customArtist = qArtist.takeIf { it.isNotBlank() && it != cleanOrigArtist }
+                )
+            }
             repository.saveLyricsOffline(
                 trackId = targetId,
                 rawLyrics = candidate.rawLyrics,
@@ -735,18 +814,117 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun saveManualLyricsToDevice(rawText: String) {
-        val track = uiState.value.currentTrack ?: return
+    // Paste Lyrics Link Fallback (LRCLIB direct or best-effort web extraction + preview)
+    fun openLinkLyricsModal(track: TrackEntity) {
+        _linkLyrics.value = LinkLyricsUiState(
+            isSheetOpen = true,
+            targetTrack = track
+        )
+    }
+
+    fun updateLinkLyricsUrl(url: String) {
+        _linkLyrics.update { it.copy(urlInput = url, errorMessage = null) }
+    }
+
+    fun updateLinkLyricsPreviewText(text: String) {
+        val isSynced = LrcParser.parse(text, "Web Link").isSynced
+        _linkLyrics.update { it.copy(previewText = text, isSynced = isSynced) }
+    }
+
+    fun fetchLyricsFromLink() {
+        val url = _linkLyrics.value.urlInput.trim()
+        if (url.isBlank()) {
+            _linkLyrics.update { it.copy(errorMessage = "Please paste a lyrics website or LRCLIB link") }
+            return
+        }
+        viewModelScope.launch {
+            _linkLyrics.update { it.copy(isLoading = true, errorMessage = null) }
+            repository.fetchLyricsFromUrl(url)
+                .onSuccess { candidate ->
+                    _linkLyrics.update {
+                        it.copy(
+                            isLoading = false,
+                            hasPreview = true,
+                            previewText = candidate.rawLyrics,
+                            sourceLabel = candidate.providerName,
+                            isSynced = candidate.isSynced,
+                            errorMessage = null
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _linkLyrics.update {
+                        it.copy(
+                            isLoading = false,
+                            errorMessage = err.message ?: "Could not load lyrics from that link"
+                        )
+                    }
+                }
+        }
+    }
+
+    fun saveLinkLyricsOffline() {
+        val linkState = _linkLyrics.value
+        val track = linkState.targetTrack ?: return
+        val rawText = linkState.previewText.trim()
         if (rawText.isBlank()) return
-        val parsed = LrcParser.parse(rawText, "Custom Local LRC")
+        val parsed = LrcParser.parse(rawText, linkState.sourceLabel.ifBlank { "Web Link" })
+        val source = linkState.sourceLabel.ifBlank {
+            if (parsed.isSynced) "Web LRC Link" else "Web Lyrics Link"
+        }
         viewModelScope.launch {
             repository.saveLyricsOffline(
                 trackId = track.id,
-                rawLyrics = rawText.trim(),
+                rawLyrics = rawText,
                 isSynced = parsed.isSynced,
-                sourceName = if (parsed.isSynced) "Local Synced LRC" else "Local Plain Lyrics"
+                sourceName = source
             )
-            showBanner("Lyrics saved locally for offline access")
+            _linkLyrics.value = LinkLyricsUiState()
+            showBanner("Saved lyrics from $source for \"${track.title}\"")
+        }
+    }
+
+    fun closeLinkLyricsModal() {
+        _linkLyrics.value = LinkLyricsUiState()
+    }
+
+    fun saveManualLyricsForTrack(trackId: Long, rawText: String, customSourceName: String? = null) {
+        if (rawText.isBlank()) return
+        val trimmed = rawText.trim()
+        val parsed = LrcParser.parse(trimmed, "Custom Local LRC")
+        val source = customSourceName ?: if (parsed.isSynced) "Local Synced LRC" else "Local Plain Lyrics"
+        viewModelScope.launch {
+            repository.saveLyricsOffline(
+                trackId = trackId,
+                rawLyrics = trimmed,
+                isSynced = parsed.isSynced,
+                sourceName = source
+            )
+            showBanner("Lyrics saved offline to device")
+        }
+    }
+
+    fun saveManualLyricsToDevice(rawText: String) {
+        val track = uiState.value.currentTrack ?: return
+        saveManualLyricsForTrack(track.id, rawText)
+    }
+
+    fun importLrcFileForTrack(trackId: Long, uri: Uri) {
+        viewModelScope.launch {
+            repository.readLrcTextFromUri(uri)
+                .onSuccess { text ->
+                    val parsed = LrcParser.parse(text, "Imported .lrc File")
+                    repository.saveLyricsOffline(
+                        trackId = trackId,
+                        rawLyrics = text,
+                        isSynced = parsed.isSynced,
+                        sourceName = if (parsed.isSynced) "Imported .lrc File" else "Imported Lyrics File"
+                    )
+                    showBanner("Imported lyrics file & saved offline")
+                }
+                .onFailure { err ->
+                    showBanner(err.message ?: "Failed to read selected .lrc file")
+                }
         }
     }
 

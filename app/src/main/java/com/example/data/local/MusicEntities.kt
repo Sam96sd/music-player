@@ -30,6 +30,8 @@ data class TrackEntity(
     val isHidden: Boolean = false,
     val lyricOffsetMs: Long = 0L,
     val tagsEdited: Boolean = false,
+    val customSearchTitle: String? = null,
+    val customSearchArtist: String? = null,
     val accentHex: String = "#00E5FF",
     val qualityBadge: String = "Audio"
 )
