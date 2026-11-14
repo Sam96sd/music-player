@@ -76,6 +76,7 @@ import com.example.ui.components.OnlineLyricsSearchDialog
 import com.example.ui.components.PasteLyricsLinkDialog
 import com.example.ui.components.PasteLyricsTextDialog
 import com.example.ui.components.QuickTagEditorDialog
+import com.example.ui.components.SettingsThemeDialog
 import com.example.ui.components.SleepTimerDialog
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.NowPlayingLyricsScreen
@@ -96,8 +97,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
-                MuffinMusicApp()
+            val viewModel: MusicPlayerViewModel = viewModel()
+            val state by viewModel.uiState.collectAsStateWithLifecycle()
+            MyApplicationTheme(themePreset = state.themePreset) {
+                MuffinMusicApp(viewModel = viewModel, stateOverride = state)
             }
         }
     }
@@ -105,10 +108,12 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MuffinMusicApp(
-    viewModel: MusicPlayerViewModel = viewModel()
+    viewModel: MusicPlayerViewModel = viewModel(),
+    stateOverride: MusicPlayerUiState? = null
 ) {
     val context = LocalContext.current
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val collectedState by viewModel.uiState.collectAsStateWithLifecycle()
+    val state = stateOverride ?: collectedState
 
     var trackForTagEdit by remember { mutableStateOf<TrackEntity?>(null) }
     var trackForDelete by remember { mutableStateOf<TrackEntity?>(null) }
@@ -117,6 +122,7 @@ fun MuffinMusicApp(
     var tracksForPlaylistAdd by remember { mutableStateOf<Pair<String, List<Long>>?>(null) }
     var showBulkDeleteConfirm by remember { mutableStateOf(false) }
     var showSleepTimerModal by remember { mutableStateOf(false) }
+    var showSettingsModal by remember { mutableStateOf(false) }
 
     val requiredAudioPermission = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -334,6 +340,7 @@ fun MuffinMusicApp(
                             tracksForPlaylistAdd = "Add \"${track.title}\" to Playlist" to listOf(track.id)
                         },
                         onOpenVoiceShieldTab = { viewModel.selectTab(AppTab.VOICE_SHIELD) },
+                        onOpenSettings = { showSettingsModal = true },
                         onRequestAudioPermission = {
                             audioPermissionLauncher.launch(requiredAudioPermission)
                         },
@@ -525,6 +532,14 @@ fun MuffinMusicApp(
             onUpdateOptions = viewModel::updateSleepTimerOptions,
             onCancelTimer = viewModel::cancelSleepTimer,
             onDismiss = { showSleepTimerModal = false }
+        )
+    }
+
+    if (showSettingsModal) {
+        SettingsThemeDialog(
+            currentTheme = state.themePreset,
+            onSelectTheme = viewModel::setThemePreset,
+            onDismiss = { showSettingsModal = false }
         )
     }
 }

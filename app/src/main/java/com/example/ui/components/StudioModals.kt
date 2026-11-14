@@ -29,8 +29,10 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -69,6 +71,7 @@ import com.example.data.network.OnlineLyricCandidate
 import com.example.ui.LinkLyricsUiState
 import com.example.ui.LyricsSearchUiState
 import com.example.ui.SleepTimerState
+import com.example.ui.theme.AppThemePreset
 import com.example.ui.theme.CrimsonDanger
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.MutedSage
@@ -81,6 +84,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarmAmber
+import com.example.ui.theme.paletteFor
 import com.example.ui.theme.studioSwitchColors
 
 @Composable
@@ -872,7 +876,7 @@ fun BulkDeleteConfirmationDialog(
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = CrimsonDanger,
-                    contentColor = TextPrimary
+                    contentColor = MaterialTheme.colorScheme.onError
                 ),
                 modifier = Modifier.testTag("confirm_bulk_delete_button")
             ) {
@@ -1138,4 +1142,211 @@ fun PasteLyricsTextDialog(
         }
     )
 }
+
+@Composable
+fun SettingsThemeDialog(
+    currentTheme: AppThemePreset,
+    onSelectTheme: (AppThemePreset) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, StudioBorder, RoundedCornerShape(24.dp)),
+            color = StudioSlate
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Settings",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Choose a comfortable color theme",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_settings_modal_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close Settings",
+                            tint = TextSecondary
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Palette,
+                        contentDescription = null,
+                        tint = MutedSage,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "APPEARANCE & EYE COMFORT",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = ElectricCyan
+                    )
+                }
+
+                AppThemePreset.entries.forEach { preset ->
+                    val previewPalette = paletteFor(preset)
+                    val isSelected = preset == currentTheme
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) ElectricCyan else StudioBorder,
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .clickable { onSelectTheme(preset) }
+                            .testTag("theme_option_${preset.storageKey}"),
+                        color = if (isSelected) StudioElevated else OledCarbon
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 4-color live palette preview badge
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(previewPalette.background)
+                                    .border(1.dp, previewPalette.border, RoundedCornerShape(12.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .clip(CircleShape)
+                                                .background(previewPalette.primary)
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .clip(CircleShape)
+                                                .background(previewPalette.secondary)
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .clip(CircleShape)
+                                                .background(previewPalette.tertiary)
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .clip(CircleShape)
+                                                .background(previewPalette.surfaceElevated)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = preset.displayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(5.dp))
+                                            .background(ElectricCyan.copy(alpha = 0.14f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = preset.badge,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = ElectricCyan
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = preset.description,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                            }
+
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Active Theme",
+                                    tint = ElectricCyan,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricCyan,
+                            contentColor = OledCarbon
+                        ),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Done", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
 

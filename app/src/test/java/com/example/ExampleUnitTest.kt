@@ -218,4 +218,20 @@ class ExampleUnitTest {
         assertTrue(extracted!!.contains("Line one of the verse"))
         assertFalse(extracted.contains("Home"))
     }
+
+    @Test
+    fun themePresets_includePastelDefaultAndAdditionalOptions() {
+        val allThemes = com.example.ui.theme.AppThemePreset.entries
+        assertTrue(allThemes.size >= 3)
+        assertEquals(
+            com.example.ui.theme.AppThemePreset.PASTEL_DUSK,
+            com.example.ui.theme.AppThemePreset.fromStorageKey(null)
+        )
+        assertEquals(
+            com.example.ui.theme.AppThemePreset.WARM_ESPRESSO,
+            com.example.ui.theme.AppThemePreset.fromStorageKey("warm_espresso")
+        )
+        assertTrue(com.example.ui.theme.paletteFor(com.example.ui.theme.AppThemePreset.SOFT_LINEN).isLight)
+        assertFalse(com.example.ui.theme.paletteFor(com.example.ui.theme.AppThemePreset.PASTEL_DUSK).isLight)
+    }
 }

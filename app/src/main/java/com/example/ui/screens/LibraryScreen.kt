@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -128,6 +129,7 @@ fun LibraryScreen(
     onOpenDeleteModal: (TrackEntity) -> Unit,
     onOpenAddToPlaylist: (TrackEntity) -> Unit,
     onOpenVoiceShieldTab: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRequestAudioPermission: () -> Unit,
     onImportAudioFiles: () -> Unit,
     onScanDeviceMedia: () -> Unit
@@ -356,6 +358,23 @@ fun LibraryScreen(
                                                     .size(15.dp)
                                             )
                                         }
+                                    }
+
+                                    Surface(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(9.dp))
+                                            .clickable { onOpenSettings() }
+                                            .testTag("open_settings_button"),
+                                        color = StudioElevated
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Settings,
+                                            contentDescription = "Settings & Themes",
+                                            tint = ElectricCyan,
+                                            modifier = Modifier
+                                                .padding(6.dp)
+                                                .size(15.dp)
+                                        )
                                     }
                                 }
                             }

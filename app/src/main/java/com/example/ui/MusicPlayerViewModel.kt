@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.Manifest
 import android.app.Application
+import android.content.Context
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.net.Uri
@@ -20,6 +21,7 @@ import com.example.domain.FilteredTrackItem
 import com.example.domain.LrcParser
 import com.example.domain.ParsedLyrics
 import com.example.domain.VoiceNoteFilterEngine
+import com.example.ui.theme.AppThemePreset
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -118,12 +120,18 @@ data class MusicPlayerUiState(
     val sleepTimer: SleepTimerState = SleepTimerState(),
     val lyricsSearch: LyricsSearchUiState = LyricsSearchUiState(),
     val linkLyrics: LinkLyricsUiState = LinkLyricsUiState(),
+    val themePreset: AppThemePreset = AppThemePreset.PASTEL_DUSK,
     val statusBannerMessage: String? = null
 ) {
     val isSelectionMode: Boolean get() = selectedTrackIds.isNotEmpty()
 }
 
 class MusicPlayerViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val prefs = application.applicationContext.getSharedPreferences(
+        "muffin_preferences",
+        Context.MODE_PRIVATE
+    )
 
     private val repository: MusicRepository = MusicRepository(
         context = application.applicationContext,
@@ -146,6 +154,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private val _sleepTimer = MutableStateFlow(SleepTimerState())
     private val _lyricsSearch = MutableStateFlow(LyricsSearchUiState())
     private val _linkLyrics = MutableStateFlow(LinkLyricsUiState())
+    private val _themePreset = MutableStateFlow(
+        AppThemePreset.fromStorageKey(prefs.getString("app_theme_preset", null))
+    )
     private val _statusBanner = MutableStateFlow<String?>(null)
 
     private var mediaPlayer: MediaPlayer? = null
@@ -201,7 +212,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         val selectedIds: Set<Long>,
         val fetchingIds: Set<Long>,
         val batchLyrics: BatchLyricsProgress,
-        val linkLyrics: LinkLyricsUiState
+        val linkLyrics: LinkLyricsUiState,
+        val themePreset: AppThemePreset
     )
 
     private val metaFlow = combine(
@@ -211,11 +223,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         _selectedTrackIds,
         _fetchingTrackIds
     ) { perm, scanning, banner, selected, fetching ->
-        MetaSnapshot(perm, scanning, banner, selected, fetching, BatchLyricsProgress(), LinkLyricsUiState())
+        MetaSnapshot(
+            perm,
+            scanning,
+            banner,
+            selected,
+            fetching,
+            BatchLyricsProgress(),
+            LinkLyricsUiState(),
+            AppThemePreset.PASTEL_DUSK
+        )
     }.combine(_batchLyrics) { meta, batch ->
         meta.copy(batchLyrics = batch)
     }.combine(_linkLyrics) { meta, linkState ->
         meta.copy(linkLyrics = linkState)
+    }.combine(_themePreset) { meta, theme ->
+        meta.copy(themePreset = theme)
     }
 
     val uiState: StateFlow<MusicPlayerUiState> = combine(
@@ -318,12 +341,16 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             selectedTrackIds = meta.selectedIds.intersect(visibleIdSet),
             fetchingTrackIds = meta.fetchingIds,
             batchLyrics = meta.batchLyrics,
-            linkLyrics = meta.linkLyrics
+            linkLyrics = meta.linkLyrics,
+            themePreset = meta.themePreset
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
-        initialValue = MusicPlayerUiState(hasAudioPermission = checkAudioPermissionGranted())
+        initialValue = MusicPlayerUiState(
+            hasAudioPermission = checkAudioPermissionGranted(),
+            themePreset = AppThemePreset.fromStorageKey(prefs.getString("app_theme_preset", null))
+        )
     )
 
     init {
@@ -360,6 +387,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun selectTab(tab: AppTab) {
         _activeTab.value = tab
+    }
+
+    fun setThemePreset(preset: AppThemePreset) {
+        _themePreset.value = preset
+        prefs.edit().putString("app_theme_preset", preset.storageKey).apply()
+        showBanner("Theme changed to ${preset.displayName}")
     }
 
     fun dismissBanner() {
