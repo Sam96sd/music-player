@@ -87,7 +87,25 @@ class MusicRepository(
         dao.setTrackHidden(trackId, isHidden)
     }
 
+    suspend fun setTracksHidden(trackIds: List<Long>, isHidden: Boolean) {
+        if (trackIds.isEmpty()) return
+        dao.setTracksHidden(trackIds, isHidden)
+    }
+
     suspend fun deleteTrackFromDevice(track: TrackEntity) = withContext(Dispatchers.IO) {
+        deleteUnderlyingFile(track)
+        dao.deleteTracksWithCleanup(listOf(track.id))
+    }
+
+    suspend fun deleteTracksFromDevice(tracks: List<TrackEntity>) = withContext(Dispatchers.IO) {
+        if (tracks.isEmpty()) return@withContext
+        for (track in tracks) {
+            deleteUnderlyingFile(track)
+        }
+        dao.deleteTracksWithCleanup(tracks.map { it.id })
+    }
+
+    private fun deleteUnderlyingFile(track: TrackEntity) {
         runCatching {
             val uri = Uri.parse(track.uriString)
             when (uri.scheme) {
@@ -100,9 +118,6 @@ class MusicRepository(
                 }
             }
         }
-        dao.removeTrackFromAllPlaylists(track.id)
-        dao.deleteLyricsForTrack(track.id)
-        dao.deleteTrackById(track.id)
     }
 
     suspend fun updateLyricOffset(trackId: Long, offsetMs: Long) {
@@ -111,6 +126,10 @@ class MusicRepository(
 
     suspend fun incrementPlayCount(trackId: Long) {
         dao.incrementPlayCount(trackId)
+    }
+
+    suspend fun fetchFirstAvailableLyrics(title: String, artist: String): OnlineLyricCandidate? {
+        return lyricsClient.fetchFirstAvailableLyrics(title, artist)
     }
 
     suspend fun searchOnlineLyrics(title: String, artist: String): List<OnlineLyricCandidate> {
@@ -150,6 +169,13 @@ class MusicRepository(
 
     suspend fun addTrackToPlaylist(playlistId: Long, trackId: Long) {
         dao.addTrackToPlaylist(PlaylistTrackCrossRef(playlistId = playlistId, trackId = trackId))
+    }
+
+    suspend fun addTracksToPlaylist(playlistId: Long, trackIds: List<Long>) {
+        if (trackIds.isEmpty()) return
+        dao.addTracksToPlaylist(
+            trackIds.map { PlaylistTrackCrossRef(playlistId = playlistId, trackId = it) }
+        )
     }
 
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: Long) {

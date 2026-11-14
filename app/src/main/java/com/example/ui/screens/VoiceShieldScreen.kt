@@ -58,8 +58,9 @@ import com.example.domain.LrcParser
 import com.example.ui.FilterSettingsState
 import com.example.ui.theme.CrimsonDanger
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.MutedSage
+import com.example.ui.theme.MutedSlateBlue
 import com.example.ui.theme.OledCarbon
-import com.example.ui.theme.SignalMint
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioSlate
@@ -67,6 +68,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarmAmber
+import com.example.ui.theme.studioSwitchColors
 
 @Composable
 fun VoiceShieldScreen(
@@ -96,17 +98,17 @@ fun VoiceShieldScreen(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .border(1.dp, SignalMint.copy(alpha = 0.5f), RoundedCornerShape(20.dp)),
+                    .clip(RoundedCornerShape(18.dp))
+                    .border(1.dp, StudioBorder, RoundedCornerShape(18.dp)),
                 color = StudioSlate
             ) {
-                Column(modifier = Modifier.padding(18.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.VerifiedUser,
                             contentDescription = null,
-                            tint = SignalMint,
-                            modifier = Modifier.size(28.dp)
+                            tint = MutedSage,
+                            modifier = Modifier.size(26.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
@@ -118,7 +120,7 @@ fun VoiceShieldScreen(
                             Text(
                                 text = "${blockedVoiceNotes.size} voice notes & non-music files excluded from playback",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = SignalMint
+                                color = MutedSage
                             )
                         }
                     }
@@ -146,10 +148,11 @@ fun VoiceShieldScreen(
                                 color = TextSecondary
                             )
                         }
+                        Spacer(modifier = Modifier.width(10.dp))
                         Switch(
                             checked = filterSettings.strictKnownFormatsOnly,
                             onCheckedChange = onToggleStrictFormats,
-                            colors = SwitchDefaults.colors(checkedThumbColor = ElectricCyan),
+                            colors = studioSwitchColors(),
                             modifier = Modifier.testTag("strict_formats_switch")
                         )
                     }
@@ -175,10 +178,11 @@ fun VoiceShieldScreen(
                                 color = TextSecondary
                             )
                         }
+                        Spacer(modifier = Modifier.width(10.dp))
                         Switch(
                             checked = filterSettings.blockWhatsAppVoiceNotes,
                             onCheckedChange = onToggleBlockVoiceNotes,
-                            colors = SwitchDefaults.colors(checkedThumbColor = SignalMint),
+                            colors = studioSwitchColors(),
                             modifier = Modifier.testTag("whatsapp_signature_switch")
                         )
                     }
@@ -196,13 +200,13 @@ fun VoiceShieldScreen(
                 Text(
                     text = "FOLDER BLACKLIST RULES (${blacklistedFolders.size})",
                     style = MaterialTheme.typography.labelLarge,
-                    color = ElectricCyan
+                    color = MutedSlateBlue
                 )
                 Button(
                     onClick = { showAddFolderModal = true },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = StudioElevated,
-                        contentColor = ElectricCyan
+                        contentColor = TextPrimary
                     ),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -241,8 +245,8 @@ fun VoiceShieldScreen(
                         Icon(
                             imageVector = Icons.Default.FolderOff,
                             contentDescription = null,
-                            tint = if (folderRule.isEnabled) WarmAmber else TextMuted,
-                            modifier = Modifier.size(22.dp)
+                            tint = if (folderRule.isEnabled) MutedSlateBlue else TextMuted,
+                            modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
@@ -255,7 +259,7 @@ fun VoiceShieldScreen(
                             Text(
                                 text = folderRule.pathPattern,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = ElectricCyan
+                                color = MutedSlateBlue
                             )
                             Text(
                                 text = folderRule.description,
@@ -277,10 +281,11 @@ fun VoiceShieldScreen(
                                 )
                             }
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
                         Switch(
                             checked = folderRule.isEnabled,
                             onCheckedChange = { onToggleFolderRule(folderRule.pathPattern, it) },
-                            colors = SwitchDefaults.colors(checkedThumbColor = SignalMint)
+                            colors = studioSwitchColors()
                         )
                     }
                 }

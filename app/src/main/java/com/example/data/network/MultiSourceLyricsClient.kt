@@ -30,17 +30,60 @@ class MultiSourceLyricsClient {
         .build()
 
     /**
-     * Searches top online lyric databases concurrently:
-     * 1. LRCLIB.net (Synced LRC + Plain lyrics)
-     * 2. Lyrics.ovh (Official Plain lyrics)
-     * 3. Lyrist / LRCLIB title-fallback (Additional online source)
+     * Automatic mode: tries Source 1 (LRCLIB.net) first and returns its top match immediately;
+     * if null/empty, falls back to Source 2 (Lyrics.ovh), then Source 3 (Lyrist Index).
+     */
+    suspend fun fetchFirstAvailableLyrics(
+        title: String,
+        artist: String
+    ): OnlineLyricCandidate? = withContext(Dispatchers.IO) {
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim().let {
+            if (it.equals("Unknown Artist", ignoreCase = true) || it.equals("<unknown>", ignoreCase = true)) "" else it
+        }
+        if (cleanTitle.isEmpty()) return@withContext null
+
+        // Source 1: LRCLIB.net
+        val source1 = runCatching { fetchFromLrclib(cleanTitle, cleanArtist) }.getOrDefault(emptyList())
+        if (source1.isNotEmpty()) {
+            return@withContext source1.first()
+        }
+
+        // Source 2: Lyrics.ovh
+        val source2 = runCatching { fetchFromLyricsOvh(cleanTitle, cleanArtist) }.getOrNull()
+        if (source2 != null) {
+            return@withContext source2
+        }
+
+        // Source 3: Lyrist Index
+        val source3 = runCatching { fetchFromLyrist(cleanTitle, cleanArtist) }.getOrNull()
+        if (source3 != null) {
+            return@withContext source3
+        }
+
+        // Final title-only fallback on LRCLIB if artist metadata was noisy
+        if (cleanArtist.isNotEmpty()) {
+            val titleOnly = runCatching { fetchFromLrclib(cleanTitle, "") }.getOrDefault(emptyList())
+            if (titleOnly.isNotEmpty()) {
+                return@withContext titleOnly.first()
+            }
+        }
+
+        null
+    }
+
+    /**
+     * Manual "Choose another version" picker: searches top online lyric databases concurrently
+     * and returns up to 3 candidates to compare and preview.
      */
     suspend fun searchTopProviders(
         title: String,
         artist: String
     ): List<OnlineLyricCandidate> = withContext(Dispatchers.IO) {
         val cleanTitle = title.trim()
-        val cleanArtist = artist.trim()
+        val cleanArtist = artist.trim().let {
+            if (it.equals("Unknown Artist", ignoreCase = true) || it.equals("<unknown>", ignoreCase = true)) "" else it
+        }
         val results = mutableListOf<OnlineLyricCandidate>()
 
         coroutineScope {
@@ -61,7 +104,6 @@ class MultiSourceLyricsClient {
             }
         }
 
-        // If combined artist+title search returned nothing, try LRCLIB with title only
         if (results.isEmpty() && cleanTitle.isNotEmpty() && cleanArtist.isNotEmpty()) {
             val titleOnlyHits = runCatching { fetchFromLrclib(cleanTitle, "") }.getOrDefault(emptyList())
             results.addAll(titleOnlyHits)
@@ -87,8 +129,12 @@ class MultiSourceLyricsClient {
             val jsonArray = JSONArray(bodyStr)
             val candidates = mutableListOf<OnlineLyricCandidate>()
 
-            for (i in 0 until minOf(jsonArray.length(), 2)) {
-                val obj = jsonArray.getJSONObject(i)
+            // Prefer synced LRC items first
+            val items = (0 until jsonArray.length()).map { jsonArray.getJSONObject(it) }
+                .sortedByDescending { it.optString("syncedLyrics", "").isNotBlank() }
+
+            for (i in 0 until minOf(items.size, 2)) {
+                val obj = items[i]
                 val synced = obj.optString("syncedLyrics", "").trim()
                 val plain = obj.optString("plainLyrics", "").trim()
                 val chosenLyrics = if (synced.isNotEmpty()) synced else plain

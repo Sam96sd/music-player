@@ -98,6 +98,7 @@ fun NowPlayingLyricsScreen(
     onSkipPrev: () -> Unit,
     onToggleShuffle: () -> Unit,
     onToggleRepeatOne: () -> Unit,
+    onAutoFetchLyrics: () -> Unit,
     onOpenOnlineLyricsSearch: () -> Unit,
     onSaveManualLyrics: (String) -> Unit,
     onDeleteOfflineLyrics: () -> Unit,
@@ -252,7 +253,9 @@ fun NowPlayingLyricsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = onOpenOnlineLyricsSearch,
+                    onClick = {
+                        if (parsedLyrics == null) onAutoFetchLyrics() else onOpenOnlineLyricsSearch()
+                    },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = ElectricCyan.copy(alpha = 0.18f),
                         contentColor = ElectricCyan
@@ -270,7 +273,7 @@ fun NowPlayingLyricsScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (parsedLyrics == null) "Search Online Lyrics" else "Switch Lyric Source",
+                        text = if (parsedLyrics == null) "Fetch Lyrics (Auto)" else "Choose another version",
                         style = MaterialTheme.typography.labelLarge
                     )
                 }
@@ -499,14 +502,14 @@ fun NowPlayingLyricsScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Search the top 2–3 online lyric databases (LRCLIB, OpenLRC, Lyrics.ovh), preview the best timestamped match, and save it to your device for permanent offline sync.",
+                        text = "Automatically grabs the best online lyrics and saves them to your device for offline sync, or choose another version manually.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary,
                         textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(18.dp))
                     Button(
-                        onClick = onOpenOnlineLyricsSearch,
+                        onClick = onAutoFetchLyrics,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ElectricCyan,
                             contentColor = OledCarbon
@@ -522,10 +525,14 @@ fun NowPlayingLyricsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Search & Save Online Lyrics",
+                            text = "Fetch & Save Lyrics",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onOpenOnlineLyricsSearch) {
+                        Text("Choose another version", color = TextSecondary)
                     }
                 }
             }

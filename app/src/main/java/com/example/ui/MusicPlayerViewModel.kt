@@ -20,6 +20,7 @@ import com.example.domain.FilteredTrackItem
 import com.example.domain.LrcParser
 import com.example.domain.ParsedLyrics
 import com.example.domain.VoiceNoteFilterEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,6 +58,7 @@ data class SleepTimerState(
 data class LyricsSearchUiState(
     val isSheetOpen: Boolean = false,
     val isSearching: Boolean = false,
+    val targetTrackId: Long? = null,
     val queryTitle: String = "",
     val queryArtist: String = "",
     val candidates: List<OnlineLyricCandidate> = emptyList(),
@@ -64,9 +66,17 @@ data class LyricsSearchUiState(
     val errorMessage: String? = null
 )
 
+data class BatchLyricsProgress(
+    val isRunning: Boolean = false,
+    val processed: Int = 0,
+    val total: Int = 0,
+    val savedCount: Int = 0,
+    val currentTrackTitle: String = ""
+)
+
 data class FilterSettingsState(
-    val strictKnownFormatsOnly: Boolean = true, // Only .mp3, .m4a, .flac
-    val blockWhatsAppVoiceNotes: Boolean = true, // Block PTT-*, AUD-*, voice_note* even if long .m4a
+    val strictKnownFormatsOnly: Boolean = true,
+    val blockWhatsAppVoiceNotes: Boolean = true,
     val searchQuery: String = ""
 )
 
@@ -74,6 +84,9 @@ data class MusicPlayerUiState(
     val activeTab: AppTab = AppTab.LIBRARY,
     val hasAudioPermission: Boolean = false,
     val isScanning: Boolean = false,
+    val selectedTrackIds: Set<Long> = emptySet(),
+    val fetchingTrackIds: Set<Long> = emptySet(),
+    val batchLyrics: BatchLyricsProgress = BatchLyricsProgress(),
     val visibleTracks: List<TrackEntity> = emptyList(),
     val blockedVoiceNotes: List<FilteredTrackItem> = emptyList(),
     val hiddenTracks: List<TrackEntity> = emptyList(),
@@ -92,7 +105,9 @@ data class MusicPlayerUiState(
     val sleepTimer: SleepTimerState = SleepTimerState(),
     val lyricsSearch: LyricsSearchUiState = LyricsSearchUiState(),
     val statusBannerMessage: String? = null
-)
+) {
+    val isSelectionMode: Boolean get() = selectedTrackIds.isNotEmpty()
+}
 
 class MusicPlayerViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -104,6 +119,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private val _activeTab = MutableStateFlow(AppTab.LIBRARY)
     private val _hasAudioPermission = MutableStateFlow(checkAudioPermissionGranted())
     private val _isScanning = MutableStateFlow(false)
+    private val _selectedTrackIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _fetchingTrackIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _batchLyrics = MutableStateFlow(BatchLyricsProgress())
     private val _currentTrackId = MutableStateFlow<Long?>(null)
     private val _isPlaying = MutableStateFlow(false)
     private val _isShuffle = MutableStateFlow(false)
@@ -118,6 +136,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private var mediaPlayer: MediaPlayer? = null
     private var progressTickerJob: Job? = null
     private var sleepTimerJob: Job? = null
+    private var batchLyricsJob: Job? = null
     private var currentVolume: Float = 1.0f
 
     private data class CoreDataSnapshot(
@@ -163,15 +182,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private data class MetaSnapshot(
         val hasPermission: Boolean,
         val isScanning: Boolean,
-        val statusBanner: String?
+        val statusBanner: String?,
+        val selectedIds: Set<Long>,
+        val fetchingIds: Set<Long>,
+        val batchLyrics: BatchLyricsProgress
     )
 
     private val metaFlow = combine(
         _hasAudioPermission,
         _isScanning,
-        _statusBanner
-    ) { perm, scanning, banner ->
-        MetaSnapshot(perm, scanning, banner)
+        _statusBanner,
+        _selectedTrackIds,
+        _fetchingTrackIds
+    ) { perm, scanning, banner, selected, fetching ->
+        MetaSnapshot(perm, scanning, banner, selected, fetching, BatchLyricsProgress())
+    }.combine(_batchLyrics) { meta, batch ->
+        meta.copy(batchLyrics = batch)
     }
 
     val uiState: StateFlow<MusicPlayerUiState> = combine(
@@ -266,10 +292,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             lyricsSearch = lyricsModal
         )
     }.combine(metaFlow) { state, meta ->
+        val visibleIdSet = state.visibleTracks.map { it.id }.toSet()
         state.copy(
             hasAudioPermission = meta.hasPermission,
             isScanning = meta.isScanning,
-            statusBannerMessage = meta.statusBanner
+            statusBannerMessage = meta.statusBanner,
+            selectedTrackIds = meta.selectedIds.intersect(visibleIdSet),
+            fetchingTrackIds = meta.fetchingIds,
+            batchLyrics = meta.batchLyrics
         )
     }.stateIn(
         scope = viewModelScope,
@@ -324,6 +354,81 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             if (_statusBanner.value == message) {
                 _statusBanner.value = null
             }
+        }
+    }
+
+    // Multi-Select Controls
+    fun enterSelectionMode(trackId: Long) {
+        _selectedTrackIds.update { it + trackId }
+    }
+
+    fun toggleTrackSelection(trackId: Long) {
+        _selectedTrackIds.update { current ->
+            if (trackId in current) current - trackId else current + trackId
+        }
+    }
+
+    fun selectAllVisibleTracks() {
+        val allIds = uiState.value.visibleTracks.map { it.id }.toSet()
+        _selectedTrackIds.update { current ->
+            if (current.size == allIds.size && allIds.isNotEmpty()) emptySet() else allIds
+        }
+    }
+
+    fun clearSelection() {
+        _selectedTrackIds.value = emptySet()
+    }
+
+    fun hideSelectedTracks() {
+        val ids = _selectedTrackIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val currentId = uiState.value.currentTrack?.id
+            if (currentId != null && currentId in ids && _isPlaying.value) {
+                releaseMediaPlayer()
+                _isPlaying.value = false
+            }
+            repository.setTracksHidden(ids, true)
+            clearSelection()
+            showBanner("Hidden ${ids.size} song(s) from library")
+        }
+    }
+
+    fun deleteSelectedTracksFromDevice() {
+        val ids = _selectedTrackIds.value
+        val targets = uiState.value.visibleTracks.filter { it.id in ids }
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            val currentId = uiState.value.currentTrack?.id
+            if (currentId != null && currentId in ids) {
+                releaseMediaPlayer()
+                _isPlaying.value = false
+                _currentTrackId.value = null
+            }
+            repository.deleteTracksFromDevice(targets)
+            clearSelection()
+            showBanner("Deleted ${targets.size} file(s) from device")
+        }
+    }
+
+    fun addTracksToPlaylist(playlistId: Long, trackIds: List<Long>, playlistName: String) {
+        if (trackIds.isEmpty()) return
+        viewModelScope.launch {
+            repository.addTracksToPlaylist(playlistId, trackIds)
+            clearSelection()
+            showBanner("Added ${trackIds.size} song(s) to \"$playlistName\"")
+        }
+    }
+
+    fun createPlaylistAndAddTracks(name: String, trackIds: List<Long>) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            val newId = repository.createPlaylist(name, "")
+            if (trackIds.isNotEmpty()) {
+                repository.addTracksToPlaylist(newId, trackIds)
+            }
+            clearSelection()
+            showBanner("Created \"${name.trim()}\" with ${trackIds.size} song(s)")
         }
     }
 
@@ -463,19 +568,115 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // Online Lyrics Search & Local Offline Persistence
+    // Automatic & Batch Lyrics Fetching (NEVER triggers playback)
+    fun autoFetchLyricsForTrack(track: TrackEntity) {
+        if (track.id in _fetchingTrackIds.value) return
+        viewModelScope.launch {
+            _fetchingTrackIds.update { it + track.id }
+            val candidate = runCatching {
+                repository.fetchFirstAvailableLyrics(track.title, track.artist)
+            }.getOrNull()
+            if (candidate != null) {
+                repository.saveLyricsOffline(
+                    trackId = track.id,
+                    rawLyrics = candidate.rawLyrics,
+                    isSynced = candidate.isSynced,
+                    sourceName = candidate.providerName
+                )
+                showBanner("Saved lyrics for \"${track.title}\" (${candidate.providerName})")
+            } else {
+                showBanner("No online lyrics found for \"${track.title}\"")
+            }
+            _fetchingTrackIds.update { it - track.id }
+        }
+    }
+
+    fun fetchAllMissingLyrics() {
+        val missing = uiState.value.visibleTracks.filter {
+            !uiState.value.savedLyricsMap.containsKey(it.id)
+        }
+        if (missing.isEmpty()) {
+            showBanner("All songs in your library already have saved lyrics")
+            return
+        }
+        startBatchLyricsFetch(missing)
+    }
+
+    fun fetchLyricsForSelectedTracks() {
+        val selectedIds = _selectedTrackIds.value
+        val targets = uiState.value.visibleTracks.filter { it.id in selectedIds }
+        clearSelection()
+        if (targets.isEmpty()) return
+        startBatchLyricsFetch(targets)
+    }
+
+    private fun startBatchLyricsFetch(tracks: List<TrackEntity>) {
+        batchLyricsJob?.cancel()
+        batchLyricsJob = viewModelScope.launch {
+            var saved = 0
+            _batchLyrics.value = BatchLyricsProgress(
+                isRunning = true,
+                processed = 0,
+                total = tracks.size,
+                savedCount = 0,
+                currentTrackTitle = tracks.firstOrNull()?.title.orEmpty()
+            )
+            try {
+                tracks.forEachIndexed { index, track ->
+                    if (!isActive) return@launch
+                    _batchLyrics.update {
+                        it.copy(
+                            processed = index,
+                            currentTrackTitle = track.title
+                        )
+                    }
+                    _fetchingTrackIds.update { it + track.id }
+                    val candidate = runCatching {
+                        repository.fetchFirstAvailableLyrics(track.title, track.artist)
+                    }.getOrNull()
+                    if (candidate != null) {
+                        repository.saveLyricsOffline(
+                            trackId = track.id,
+                            rawLyrics = candidate.rawLyrics,
+                            isSynced = candidate.isSynced,
+                            sourceName = candidate.providerName
+                        )
+                        saved++
+                    }
+                    _fetchingTrackIds.update { it - track.id }
+                    _batchLyrics.update {
+                        it.copy(
+                            processed = index + 1,
+                            savedCount = saved
+                        )
+                    }
+                }
+                showBanner("Fetched lyrics for $saved of ${tracks.size} song(s)")
+            } catch (_: CancellationException) {
+                showBanner("Lyrics batch cancelled ($saved saved)")
+            } finally {
+                _fetchingTrackIds.value = emptySet()
+                _batchLyrics.value = BatchLyricsProgress()
+            }
+        }
+    }
+
+    fun cancelBatchLyricsFetch() {
+        batchLyricsJob?.cancel()
+    }
+
+    // Manual "Choose another version" Online Lyrics Picker (NEVER triggers playback)
     fun openLyricsSearchModal(track: TrackEntity? = uiState.value.currentTrack) {
         val target = track ?: return
+        val cleanArtist = if (target.artist == "Unknown Artist") "" else target.artist
         _lyricsSearch.value = LyricsSearchUiState(
             isSheetOpen = true,
             isSearching = true,
+            targetTrackId = target.id,
             queryTitle = target.title,
-            queryArtist = if (target.artist == "Unknown Artist") "" else target.artist
+            queryArtist = cleanArtist
         )
-        executeOnlineLyricsSearch(
-            target.title,
-            if (target.artist == "Unknown Artist") "" else target.artist
-        )
+        executeOnlineLyricsSearch(target.title, cleanArtist)
     }
 
     fun updateLyricsSearchQuery(title: String, artist: String) {
@@ -521,16 +722,16 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun saveCandidateLyricsToDevice(candidate: OnlineLyricCandidate) {
-        val track = uiState.value.currentTrack ?: return
+        val targetId = _lyricsSearch.value.targetTrackId ?: uiState.value.currentTrack?.id ?: return
         viewModelScope.launch {
             repository.saveLyricsOffline(
-                trackId = track.id,
+                trackId = targetId,
                 rawLyrics = candidate.rawLyrics,
                 isSynced = candidate.isSynced,
                 sourceName = candidate.providerName
             )
             _lyricsSearch.update { it.copy(isSheetOpen = false) }
-            showBanner("Saved lyrics from ${candidate.providerName} to device for offline sync!")
+            showBanner("Saved lyrics from ${candidate.providerName} to device")
         }
     }
 
@@ -783,6 +984,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onCleared() {
         super.onCleared()
+        batchLyricsJob?.cancel()
         releaseMediaPlayer()
     }
 }

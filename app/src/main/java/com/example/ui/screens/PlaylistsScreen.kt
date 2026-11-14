@@ -111,30 +111,28 @@ fun PlaylistsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "Playlists & Smart Mixes",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Auto-curated studio queues & custom collections",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
-                Button(
-                    onClick = { showCreateModal = true },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ElectricCyan,
-                        contentColor = OledCarbon
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag("new_playlist_button")
+                Text(
+                    text = "Playlists",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = TextPrimary
+                )
+                Surface(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, StudioBorder, RoundedCornerShape(10.dp))
+                        .clickable { showCreateModal = true }
+                        .testTag("new_playlist_button"),
+                    color = StudioElevated
                 ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("New Playlist", fontWeight = FontWeight.Bold)
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "New Playlist",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }

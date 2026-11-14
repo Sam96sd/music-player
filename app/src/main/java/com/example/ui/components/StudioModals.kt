@@ -77,6 +77,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarmAmber
+import com.example.ui.theme.studioSwitchColors
 
 @Composable
 fun OnlineLyricsSearchDialog(
@@ -666,7 +667,7 @@ fun SleepTimerDialog(
                             gentleFade = it
                             onUpdateOptions(gentleFade, finishTrack)
                         },
-                        colors = SwitchDefaults.colors(checkedThumbColor = ElectricCyan)
+                        colors = studioSwitchColors()
                     )
                 }
 
@@ -693,7 +694,7 @@ fun SleepTimerDialog(
                             finishTrack = it
                             onUpdateOptions(gentleFade, finishTrack)
                         },
-                        colors = SwitchDefaults.colors(checkedThumbColor = SignalMint)
+                        colors = studioSwitchColors()
                     )
                 }
             }
@@ -721,7 +722,7 @@ fun SleepTimerDialog(
 
 @Composable
 fun AddToPlaylistDialog(
-    track: TrackEntity,
+    titleLabel: String,
     playlists: List<PlaylistWithTracks>,
     onAddToPlaylist: (Long, String) -> Unit,
     onCreateAndAdd: (String) -> Unit,
@@ -742,7 +743,7 @@ fun AddToPlaylistDialog(
         },
         title = {
             Text(
-                text = "Add \"${track.title}\" to Playlist",
+                text = titleLabel,
                 style = MaterialTheme.typography.titleLarge
             )
         },
@@ -815,6 +816,59 @@ fun AddToPlaylistDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Close", color = TextSecondary)
+            }
+        }
+    )
+}
+
+@Composable
+fun BulkDeleteConfirmationDialog(
+    selectedCount: Int,
+    onConfirmDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = StudioSlate,
+        titleContentColor = TextPrimary,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.DeleteForever,
+                contentDescription = "Confirm Bulk Delete",
+                tint = CrimsonDanger
+            )
+        },
+        title = {
+            Text(
+                text = "Delete $selectedCount file(s) from device?",
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Text(
+                text = "This will permanently delete the $selectedCount selected audio file(s) from device storage and remove them from all playlists.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirmDelete()
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CrimsonDanger,
+                    contentColor = TextPrimary
+                ),
+                modifier = Modifier.testTag("confirm_bulk_delete_button")
+            ) {
+                Text("Delete All ($selectedCount)", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
             }
         }
     )

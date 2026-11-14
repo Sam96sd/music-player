@@ -30,6 +30,9 @@ interface MusicDao {
     @Query("UPDATE tracks SET isHidden = :isHidden WHERE id = :trackId")
     suspend fun setTrackHidden(trackId: Long, isHidden: Boolean)
 
+    @Query("UPDATE tracks SET isHidden = :isHidden WHERE id IN (:trackIds)")
+    suspend fun setTracksHidden(trackIds: List<Long>, isHidden: Boolean)
+
     @Query("UPDATE tracks SET lyricOffsetMs = :offsetMs WHERE id = :trackId")
     suspend fun updateLyricOffset(trackId: Long, offsetMs: Long)
 
@@ -53,6 +56,14 @@ interface MusicDao {
 
     @Query("DELETE FROM saved_lyrics WHERE trackId IN (:trackIds)")
     suspend fun deleteLyricsForTracks(trackIds: List<Long>)
+
+    @Transaction
+    suspend fun deleteTracksWithCleanup(trackIds: List<Long>) {
+        if (trackIds.isEmpty()) return
+        removeTracksFromAllPlaylists(trackIds)
+        deleteLyricsForTracks(trackIds)
+        deleteTracksByIds(trackIds)
+    }
 
     @Transaction
     suspend fun syncMediaStoreTracks(
@@ -92,6 +103,9 @@ interface MusicDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun addTrackToPlaylist(crossRef: PlaylistTrackCrossRef)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun addTracksToPlaylist(crossRefs: List<PlaylistTrackCrossRef>)
 
     @Query("DELETE FROM playlist_track_cross_ref WHERE playlistId = :playlistId AND trackId = :trackId")
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: Long)

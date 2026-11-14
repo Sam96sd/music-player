@@ -70,6 +70,7 @@ import com.example.ui.AppTab
 import com.example.ui.MusicPlayerUiState
 import com.example.ui.MusicPlayerViewModel
 import com.example.ui.components.AddToPlaylistDialog
+import com.example.ui.components.BulkDeleteConfirmationDialog
 import com.example.ui.components.DualModeDeleteDialog
 import com.example.ui.components.OnlineLyricsSearchDialog
 import com.example.ui.components.QuickTagEditorDialog
@@ -79,9 +80,9 @@ import com.example.ui.screens.NowPlayingLyricsScreen
 import com.example.ui.screens.PlaylistsScreen
 import com.example.ui.screens.VoiceShieldScreen
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.MutedSage
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.OledCarbon
-import com.example.ui.theme.SignalMint
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioSlate
@@ -109,7 +110,8 @@ fun MuffinMusicApp(
 
     var trackForTagEdit by remember { mutableStateOf<TrackEntity?>(null) }
     var trackForDelete by remember { mutableStateOf<TrackEntity?>(null) }
-    var trackForPlaylistAdd by remember { mutableStateOf<TrackEntity?>(null) }
+    var tracksForPlaylistAdd by remember { mutableStateOf<Pair<String, List<Long>>?>(null) }
+    var showBulkDeleteConfirm by remember { mutableStateOf(false) }
     var showSleepTimerModal by remember { mutableStateOf(false) }
 
     val requiredAudioPermission = remember {
@@ -146,7 +148,12 @@ fun MuffinMusicApp(
         }
     }
 
-    if (state.activeTab != AppTab.LIBRARY) {
+    // Back button exits selection mode first, otherwise returns to Library
+    if (state.isSelectionMode) {
+        BackHandler {
+            viewModel.clearSelection()
+        }
+    } else if (state.activeTab != AppTab.LIBRARY) {
         BackHandler {
             viewModel.selectTab(AppTab.LIBRARY)
         }
@@ -164,8 +171,8 @@ fun MuffinMusicApp(
                         onOpenFullPlayer = { viewModel.selectTab(AppTab.PLAYER_LYRICS) },
                         onTogglePlayPause = { viewModel.togglePlayPause() },
                         onSkipNext = { viewModel.skipNext() },
-                        onOpenOnlineLyrics = {
-                            viewModel.openLyricsSearchModal(state.currentTrack)
+                        onAutoFetchLyrics = {
+                            state.currentTrack?.let { viewModel.autoFetchLyricsForTrack(it) }
                         }
                     )
                 }
@@ -246,8 +253,8 @@ fun MuffinMusicApp(
                         label = { Text("Voice Shield") },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = OledCarbon,
-                            selectedTextColor = SignalMint,
-                            indicatorColor = SignalMint,
+                            selectedTextColor = MutedSage,
+                            indicatorColor = MutedSage,
                             unselectedIconColor = TextSecondary,
                             unselectedTextColor = TextSecondary
                         ),
@@ -269,6 +276,9 @@ fun MuffinMusicApp(
                         blockedVoiceNotesCount = state.blockedVoiceNotes.size,
                         hasAudioPermission = state.hasAudioPermission,
                         isScanning = state.isScanning,
+                        selectedTrackIds = state.selectedTrackIds,
+                        fetchingTrackIds = state.fetchingTrackIds,
+                        batchLyrics = state.batchLyrics,
                         savedLyricsMap = state.savedLyricsMap,
                         currentTrackId = state.currentTrack?.id,
                         isPlaying = state.isPlaying,
@@ -277,13 +287,32 @@ fun MuffinMusicApp(
                         onPlayTrack = { track ->
                             viewModel.playTrack(track, openPlayerTab = false)
                         },
-                        onOpenLyricsSearch = { track ->
-                            viewModel.playTrack(track, openPlayerTab = true)
-                            viewModel.openLyricsSearchModal(track)
+                        onEnterSelectionMode = viewModel::enterSelectionMode,
+                        onToggleTrackSelection = viewModel::toggleTrackSelection,
+                        onSelectAllTracks = viewModel::selectAllVisibleTracks,
+                        onClearSelection = viewModel::clearSelection,
+                        onBulkAddToPlaylist = {
+                            val selected = state.selectedTrackIds.toList()
+                            if (selected.isNotEmpty()) {
+                                tracksForPlaylistAdd = "Add ${selected.size} song(s) to Playlist" to selected
+                            }
                         },
+                        onBulkHideFromLibrary = viewModel::hideSelectedTracks,
+                        onBulkDeleteFromDevice = {
+                            if (state.selectedTrackIds.isNotEmpty()) {
+                                showBulkDeleteConfirm = true
+                            }
+                        },
+                        onBulkFetchLyrics = viewModel::fetchLyricsForSelectedTracks,
+                        onAutoFetchLyrics = viewModel::autoFetchLyricsForTrack,
+                        onOpenManualLyricsPicker = viewModel::openLyricsSearchModal,
+                        onFetchAllMissingLyrics = viewModel::fetchAllMissingLyrics,
+                        onCancelBatchLyrics = viewModel::cancelBatchLyricsFetch,
                         onOpenQuickTagEditor = { trackForTagEdit = it },
                         onOpenDeleteModal = { trackForDelete = it },
-                        onOpenAddToPlaylist = { trackForPlaylistAdd = it },
+                        onOpenAddToPlaylist = { track ->
+                            tracksForPlaylistAdd = "Add \"${track.title}\" to Playlist" to listOf(track.id)
+                        },
                         onOpenVoiceShieldTab = { viewModel.selectTab(AppTab.VOICE_SHIELD) },
                         onRequestAudioPermission = {
                             audioPermissionLauncher.launch(requiredAudioPermission)
@@ -318,6 +347,9 @@ fun MuffinMusicApp(
                         onSkipPrev = viewModel::skipPrevious,
                         onToggleShuffle = viewModel::toggleShuffle,
                         onToggleRepeatOne = viewModel::toggleRepeatOne,
+                        onAutoFetchLyrics = {
+                            state.currentTrack?.let { viewModel.autoFetchLyricsForTrack(it) }
+                        },
                         onOpenOnlineLyricsSearch = {
                             viewModel.openLyricsSearchModal(state.currentTrack)
                         },
@@ -419,18 +451,26 @@ fun MuffinMusicApp(
         )
     }
 
-    if (trackForPlaylistAdd != null) {
-        val target = trackForPlaylistAdd!!
+    if (showBulkDeleteConfirm) {
+        BulkDeleteConfirmationDialog(
+            selectedCount = state.selectedTrackIds.size,
+            onConfirmDelete = viewModel::deleteSelectedTracksFromDevice,
+            onDismiss = { showBulkDeleteConfirm = false }
+        )
+    }
+
+    if (tracksForPlaylistAdd != null) {
+        val (titleLabel, trackIds) = tracksForPlaylistAdd!!
         AddToPlaylistDialog(
-            track = target,
+            titleLabel = titleLabel,
             playlists = state.playlists,
             onAddToPlaylist = { playlistId, name ->
-                viewModel.addTrackToPlaylist(playlistId, target.id, name)
+                viewModel.addTracksToPlaylist(playlistId, trackIds, name)
             },
             onCreateAndAdd = { newName ->
-                viewModel.createNewPlaylist(newName, "Custom Mix")
+                viewModel.createPlaylistAndAddTracks(newName, trackIds)
             },
-            onDismiss = { trackForPlaylistAdd = null }
+            onDismiss = { tracksForPlaylistAdd = null }
         )
     }
 
@@ -451,7 +491,7 @@ private fun MiniPlayerBar(
     onOpenFullPlayer: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
-    onOpenOnlineLyrics: () -> Unit
+    onAutoFetchLyrics: () -> Unit
 ) {
     val track = state.currentTrack ?: return
     val activeLineText = state.currentParsedLyrics?.lines
@@ -519,19 +559,19 @@ private fun MiniPlayerBar(
                     } else {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { onOpenOnlineLyrics() }
+                            modifier = Modifier.clickable { onAutoFetchLyrics() }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CloudDownload,
                                 contentDescription = null,
-                                tint = SignalMint,
+                                tint = MutedSage,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Tap to fetch & sync lyrics offline",
+                                text = "Tap to auto-fetch lyrics",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = SignalMint
+                                color = MutedSage
                             )
                         }
                     }
