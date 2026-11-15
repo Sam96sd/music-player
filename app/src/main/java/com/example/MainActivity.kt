@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -189,6 +190,7 @@ fun MuffinMusicApp(
                     MiniPlayerBar(
                         state = state,
                         onOpenFullPlayer = { viewModel.selectTab(AppTab.PLAYER_LYRICS) },
+                        onToggleShuffle = { viewModel.toggleShuffle() },
                         onTogglePlayPause = { viewModel.togglePlayPause() },
                         onSkipNext = { viewModel.skipNext() },
                         onAutoFetchLyrics = {
@@ -305,7 +307,13 @@ fun MuffinMusicApp(
                         filterSettings = state.filterSettings,
                         onSearchQueryChange = viewModel::updateSearchQuery,
                         onPlayTrack = { track ->
-                            viewModel.playTrack(track, openPlayerTab = false)
+                            viewModel.playTrack(track, openPlayerTab = false, queueContext = state.visibleTracks)
+                        },
+                        onPlayAllTracks = {
+                            viewModel.playAll(state.visibleTracks, openPlayerTab = false)
+                        },
+                        onShuffleTracks = {
+                            viewModel.shuffleAndPlay(state.visibleTracks, openPlayerTab = false)
                         },
                         onEnterSelectionMode = viewModel::enterSelectionMode,
                         onToggleTrackSelection = viewModel::toggleTrackSelection,
@@ -396,8 +404,14 @@ fun MuffinMusicApp(
                         allCleanTracks = state.visibleTracks,
                         savedLyricsMap = state.savedLyricsMap,
                         customPlaylists = state.playlists,
-                        onPlayTrack = { track ->
-                            viewModel.playTrack(track, openPlayerTab = true)
+                        onPlayTrackFromQueue = { queue, track ->
+                            viewModel.playTrack(track, openPlayerTab = true, queueContext = queue)
+                        },
+                        onPlayAllTracks = { queue ->
+                            viewModel.playAll(queue, openPlayerTab = true)
+                        },
+                        onShuffleTracks = { queue ->
+                            viewModel.shuffleAndPlay(queue, openPlayerTab = true)
                         },
                         onCreatePlaylist = viewModel::createNewPlaylist,
                         onDeletePlaylist = viewModel::deleteCustomPlaylist,
@@ -548,6 +562,7 @@ fun MuffinMusicApp(
 private fun MiniPlayerBar(
     state: MusicPlayerUiState,
     onOpenFullPlayer: () -> Unit,
+    onToggleShuffle: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
     onAutoFetchLyrics: () -> Unit
@@ -581,7 +596,7 @@ private fun MiniPlayerBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -638,9 +653,28 @@ private fun MiniPlayerBar(
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
+                        onClick = onToggleShuffle,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (state.isShuffleEnabled) ElectricCyan.copy(alpha = 0.16f)
+                                else OledCarbon.copy(alpha = 0f)
+                            )
+                            .testTag("mini_player_shuffle_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shuffle,
+                            contentDescription = if (state.isShuffleEnabled) "Shuffle On" else "Shuffle Off",
+                            tint = if (state.isShuffleEnabled) ElectricCyan else TextSecondary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
                         onClick = onTogglePlayPause,
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
                             .background(ElectricCyan)
                             .testTag("mini_player_play_pause_button")
@@ -651,10 +685,11 @@ private fun MiniPlayerBar(
                             tint = OledCarbon
                         )
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
                     IconButton(
                         onClick = onSkipNext,
-                        modifier = Modifier.testTag("mini_player_next_button")
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("mini_player_next_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipNext,

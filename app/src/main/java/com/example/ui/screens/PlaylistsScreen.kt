@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -74,7 +75,9 @@ fun PlaylistsScreen(
     allCleanTracks: List<TrackEntity>,
     savedLyricsMap: Map<Long, SavedLyricsEntity>,
     customPlaylists: List<PlaylistWithTracks>,
-    onPlayTrack: (TrackEntity) -> Unit,
+    onPlayTrackFromQueue: (List<TrackEntity>, TrackEntity) -> Unit,
+    onPlayAllTracks: (List<TrackEntity>) -> Unit,
+    onShuffleTracks: (List<TrackEntity>) -> Unit,
     onCreatePlaylist: (String, String) -> Unit,
     onDeletePlaylist: (Long, String) -> Unit,
     onAddTrackToPlaylist: (Long, Long, String) -> Unit,
@@ -209,11 +212,7 @@ fun PlaylistsScreen(
                     color = StudioSlate
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Column {
                                 Text(
                                     text = activeSmartType!!.title,
@@ -227,16 +226,63 @@ fun PlaylistsScreen(
                                 )
                             }
                             if (smartTracks.isNotEmpty()) {
-                                Button(
-                                    onClick = { onPlayTrack(smartTracks.first()) },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = ElectricCyan,
-                                        contentColor = OledCarbon
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Play", fontWeight = FontWeight.Bold)
+                                    Button(
+                                        onClick = { onPlayAllTracks(smartTracks) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = ElectricCyan,
+                                            contentColor = OledCarbon
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(38.dp)
+                                            .testTag("smart_playlist_play_all_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Play all", fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Surface(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(38.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .border(1.dp, ElectricCyan.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                                            .clickable { onShuffleTracks(smartTracks) }
+                                            .testTag("smart_playlist_shuffle_button"),
+                                        color = StudioElevated
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxSize(),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Shuffle,
+                                                contentDescription = "Shuffle ${activeSmartType!!.title}",
+                                                tint = ElectricCyan,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Shuffle",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = ElectricCyan,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -255,7 +301,7 @@ fun PlaylistsScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(10.dp))
-                                        .clickable { onPlayTrack(track) }
+                                        .clickable { onPlayTrackFromQueue(smartTracks, track) }
                                         .padding(vertical = 8.dp, horizontal = 6.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
@@ -355,6 +401,68 @@ fun PlaylistsScreen(
                         }
                     }
 
+                    if (pwt.tracks.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { onPlayAllTracks(pwt.tracks) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = ElectricCyan,
+                                    contentColor = OledCarbon
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .testTag("playlist_play_all_${pwt.playlist.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Play all", fontWeight = FontWeight.Bold)
+                            }
+
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, ElectricCyan.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                                    .clickable { onShuffleTracks(pwt.tracks) }
+                                    .testTag("playlist_shuffle_${pwt.playlist.id}"),
+                                color = StudioElevated
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Shuffle,
+                                        contentDescription = "Shuffle ${pwt.playlist.name}",
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = "Shuffle",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = ElectricCyan,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(10.dp))
                     HorizontalDivider(color = StudioBorder)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -371,7 +479,7 @@ fun PlaylistsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onPlayTrack(track) }
+                                    .clickable { onPlayTrackFromQueue(pwt.tracks, track) }
                                     .padding(vertical = 6.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically

@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -110,6 +111,8 @@ fun LibraryScreen(
     filterSettings: FilterSettingsState,
     onSearchQueryChange: (String) -> Unit,
     onPlayTrack: (TrackEntity) -> Unit,
+    onPlayAllTracks: () -> Unit,
+    onShuffleTracks: () -> Unit,
     onEnterSelectionMode: (Long) -> Unit,
     onToggleTrackSelection: (Long) -> Unit,
     onSelectAllTracks: () -> Unit,
@@ -627,7 +630,76 @@ fun LibraryScreen(
                     .padding(horizontal = 14.dp, vertical = 3.dp)
                     .testTag("library_search_input")
             )
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        if (tracks.isNotEmpty() && !isSelectionMode) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = onPlayAllTracks,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricCyan,
+                            contentColor = OledCarbon
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .testTag("library_play_all_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Play all",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, ElectricCyan.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                            .clickable { onShuffleTracks() }
+                            .testTag("library_shuffle_button"),
+                        color = StudioElevated
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Shuffle,
+                                contentDescription = "Shuffle All Music",
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Shuffle",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = ElectricCyan,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         if (tracks.isEmpty()) {

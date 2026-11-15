@@ -20,6 +20,7 @@ import com.example.data.network.OnlineLyricCandidate
 import com.example.domain.FilteredTrackItem
 import com.example.domain.LrcParser
 import com.example.domain.ParsedLyrics
+import com.example.domain.PlaybackQueueManager
 import com.example.domain.VoiceNoteFilterEngine
 import com.example.ui.theme.AppThemePreset
 import kotlinx.coroutines.CancellationException
@@ -164,6 +165,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private var sleepTimerJob: Job? = null
     private var batchLyricsJob: Job? = null
     private var currentVolume: Float = 1.0f
+    private var baseQueue: List<TrackEntity> = emptyList()
+    private var activeQueue: List<TrackEntity> = emptyList()
+    private var activeQueueIndex: Int = -1
 
     private data class CoreDataSnapshot(
         val allTracks: List<TrackEntity>,
@@ -484,19 +488,76 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // Playback Controls
-    fun playTrack(track: TrackEntity, openPlayerTab: Boolean = false) {
+    // Playback Controls & Fisher-Yates Shuffled Queue Management
+    fun playAll(tracks: List<TrackEntity>, openPlayerTab: Boolean = false) {
+        if (tracks.isEmpty()) return
+        _isShuffle.value = false
+        baseQueue = tracks
+        activeQueue = tracks
+        activeQueueIndex = 0
+        startPlayback(tracks.first(), openPlayerTab = openPlayerTab)
+    }
+
+    fun shuffleAndPlay(tracks: List<TrackEntity>, openPlayerTab: Boolean = false) {
+        if (tracks.isEmpty()) return
+        _isShuffle.value = true
+        baseQueue = tracks
+        activeQueue = PlaybackQueueManager.fisherYatesShuffle(tracks)
+        activeQueueIndex = 0
+        startPlayback(activeQueue.first(), openPlayerTab = openPlayerTab)
+        showBanner("Shuffling ${tracks.size} song(s)")
+    }
+
+    fun playTrack(
+        track: TrackEntity,
+        openPlayerTab: Boolean = false,
+        queueContext: List<TrackEntity>? = null
+    ) {
+        val visible = uiState.value.visibleTracks
+        val sourceList = when {
+            !queueContext.isNullOrEmpty() -> queueContext
+            baseQueue.any { it.id == track.id } -> baseQueue
+            else -> visible
+        }
+
+        if (queueContext != null && queueContext.isNotEmpty()) {
+            baseQueue = queueContext
+            activeQueue = if (_isShuffle.value) {
+                PlaybackQueueManager.buildShuffledQueueKeepingFirst(queueContext, track) { it.id }
+            } else {
+                queueContext
+            }
+            activeQueueIndex = activeQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        } else if (activeQueue.none { it.id == track.id }) {
+            baseQueue = sourceList
+            activeQueue = if (_isShuffle.value) {
+                PlaybackQueueManager.buildShuffledQueueKeepingFirst(sourceList, track) { it.id }
+            } else {
+                sourceList
+            }
+            activeQueueIndex = activeQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        } else {
+            activeQueueIndex = activeQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        }
+
         val isSameTrack = _currentTrackId.value == track.id && mediaPlayer != null
+        if (isSameTrack) {
+            if (openPlayerTab) {
+                _activeTab.value = AppTab.PLAYER_LYRICS
+            }
+            togglePlayPause()
+            return
+        }
+
+        startPlayback(track, openPlayerTab = openPlayerTab)
+    }
+
+    private fun startPlayback(track: TrackEntity, openPlayerTab: Boolean) {
         _currentTrackId.value = track.id
         _playbackDurationMs.value = track.durationMs
 
         if (openPlayerTab) {
             _activeTab.value = AppTab.PLAYER_LYRICS
-        }
-
-        if (isSameTrack) {
-            togglePlayPause()
-            return
         }
 
         viewModelScope.launch {
@@ -552,17 +613,54 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun skipNext() {
-        val list = uiState.value.visibleTracks
-        if (list.isEmpty()) return
-        val currentId = uiState.value.currentTrack?.id
-        val nextTrack = if (_isShuffle.value && list.size > 1) {
-            list.filter { it.id != currentId }.random()
-        } else {
-            val idx = list.indexOfFirst { it.id == currentId }
-            if (idx == -1 || idx == list.lastIndex) list.first() else list[idx + 1]
+    private fun ensureSyncedQueue(): List<TrackEntity> {
+        val visible = uiState.value.visibleTracks
+        if (visible.isEmpty()) {
+            baseQueue = emptyList()
+            activeQueue = emptyList()
+            activeQueueIndex = -1
+            return emptyList()
         }
-        playTrack(nextTrack, openPlayerTab = false)
+        val visibleById = visible.associateBy { it.id }
+        val filteredBase = baseQueue.mapNotNull { visibleById[it.id] }
+        baseQueue = filteredBase.ifEmpty { visible }
+
+        val filteredActive = activeQueue.mapNotNull { visibleById[it.id] }
+        if (filteredActive.isEmpty()) {
+            val current = uiState.value.currentTrack
+            activeQueue = if (_isShuffle.value) {
+                PlaybackQueueManager.buildShuffledQueueKeepingFirst(baseQueue, current) { it.id }
+            } else {
+                baseQueue
+            }
+        } else {
+            activeQueue = filteredActive
+        }
+        return activeQueue
+    }
+
+    fun skipNext() {
+        val queue = ensureSyncedQueue()
+        if (queue.isEmpty()) return
+        val currentId = uiState.value.currentTrack?.id
+        val idx = activeQueueIndex
+            .takeIf { it in queue.indices && queue[it].id == currentId }
+            ?: queue.indexOfFirst { it.id == currentId }
+
+        val nextTrack = if (idx >= 0 && idx + 1 < queue.size) {
+            activeQueueIndex = idx + 1
+            queue[activeQueueIndex]
+        } else if (_isShuffle.value) {
+            // Queue cycle finished: reshuffle a fresh Fisher-Yates cycle with no immediate repeat
+            val nextCycle = PlaybackQueueManager.reshuffleNextCycle(baseQueue, currentId) { it.id }
+            activeQueue = nextCycle
+            activeQueueIndex = 0
+            nextCycle.first()
+        } else {
+            activeQueueIndex = 0
+            queue.first()
+        }
+        startPlayback(nextTrack, openPlayerTab = false)
     }
 
     fun skipPrevious() {
@@ -570,17 +668,35 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             seekTo(0L)
             return
         }
-        val list = uiState.value.visibleTracks
-        if (list.isEmpty()) return
+        val queue = ensureSyncedQueue()
+        if (queue.isEmpty()) return
         val currentId = uiState.value.currentTrack?.id
-        val idx = list.indexOfFirst { it.id == currentId }
-        val prevTrack = if (idx <= 0) list.last() else list[idx - 1]
-        playTrack(prevTrack, openPlayerTab = false)
+        val idx = activeQueueIndex
+            .takeIf { it in queue.indices && queue[it].id == currentId }
+            ?: queue.indexOfFirst { it.id == currentId }
+        val prevIdx = if (idx > 0) idx - 1 else queue.lastIndex
+        activeQueueIndex = prevIdx
+        startPlayback(queue[prevIdx], openPlayerTab = false)
     }
 
     fun toggleShuffle() {
-        _isShuffle.update { !it }
-        showBanner(if (_isShuffle.value) "Shuffle enabled" else "Shuffle disabled")
+        val nowShuffled = !_isShuffle.value
+        _isShuffle.value = nowShuffled
+        val visible = uiState.value.visibleTracks
+        val source = baseQueue.ifEmpty { visible }
+        baseQueue = source
+        val current = uiState.value.currentTrack
+        if (source.isNotEmpty()) {
+            if (nowShuffled) {
+                activeQueue = PlaybackQueueManager.buildShuffledQueueKeepingFirst(source, current) { it.id }
+                activeQueueIndex = 0
+            } else {
+                activeQueue = source
+                activeQueueIndex = current?.let { c -> activeQueue.indexOfFirst { it.id == c.id } }
+                    ?.coerceAtLeast(0) ?: 0
+            }
+        }
+        showBanner(if (nowShuffled) "Shuffle enabled" else "Shuffle disabled")
     }
 
     fun toggleRepeatOne() {

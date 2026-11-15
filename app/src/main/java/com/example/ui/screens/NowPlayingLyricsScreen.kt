@@ -582,11 +582,15 @@ fun NowPlayingLyricsScreen(
         ) {
             IconButton(
                 onClick = onToggleShuffle,
-                modifier = Modifier.testTag("shuffle_button")
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(if (isShuffle) ElectricCyan.copy(alpha = 0.16f) else OledCarbon.copy(alpha = 0f))
+                    .testTag("shuffle_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Shuffle,
-                    contentDescription = "Shuffle",
+                    contentDescription = if (isShuffle) "Shuffle On" else "Shuffle Off",
                     tint = if (isShuffle) ElectricCyan else TextSecondary
                 )
             }

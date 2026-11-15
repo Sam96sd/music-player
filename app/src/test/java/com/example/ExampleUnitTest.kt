@@ -7,9 +7,12 @@ import com.example.domain.ArabiziTransliterator
 import com.example.domain.LrcParser
 import com.example.domain.LyricsLinkExtractor
 import com.example.domain.LyricsMatcher
+import com.example.domain.PlaybackQueueManager
 import com.example.domain.VoiceNoteFilterEngine
+import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -233,5 +236,73 @@ class ExampleUnitTest {
         )
         assertTrue(com.example.ui.theme.paletteFor(com.example.ui.theme.AppThemePreset.SOFT_LINEN).isLight)
         assertFalse(com.example.ui.theme.paletteFor(com.example.ui.theme.AppThemePreset.PASTEL_DUSK).isLight)
+    }
+
+    @Test
+    fun playbackQueueManager_fisherYatesShuffleHasNoRepeatsAndEverySongOnce() {
+        val sampleTracks = (1L..25L).map { idx ->
+            TrackEntity(
+                id = idx,
+                title = "Track $idx",
+                artist = "Artist $idx",
+                album = "Album",
+                filePath = "/storage/emulated/0/Music/track_$idx.mp3",
+                uriString = "file:///Music/track_$idx.mp3",
+                extension = "mp3",
+                durationMs = 180_000L
+            )
+        }
+
+        assertEquals(emptyList<TrackEntity>(), PlaybackQueueManager.fisherYatesShuffle(emptyList<TrackEntity>()))
+        assertEquals(listOf(sampleTracks.first()), PlaybackQueueManager.fisherYatesShuffle(listOf(sampleTracks.first())))
+
+        val shuffledA = PlaybackQueueManager.fisherYatesShuffle(sampleTracks, Random(42))
+        val shuffledB = PlaybackQueueManager.fisherYatesShuffle(sampleTracks, Random(99))
+
+        assertEquals(sampleTracks.size, shuffledA.size)
+        assertEquals(sampleTracks.map { it.id }.toSet(), shuffledA.map { it.id }.toSet())
+        assertEquals(sampleTracks.map { it.id }.toSet(), shuffledB.map { it.id }.toSet())
+        assertNotEquals(sampleTracks.map { it.id }, shuffledA.map { it.id })
+        assertNotEquals(shuffledA.map { it.id }, shuffledB.map { it.id })
+    }
+
+    @Test
+    fun playbackQueueManager_keepsAnchorFirstAndAvoidsImmediateRepeatOnReshuffle() {
+        val sampleTracks = (1L..6L).map { idx ->
+            TrackEntity(
+                id = idx,
+                title = "Song $idx",
+                artist = "Singer $idx",
+                album = "Album",
+                filePath = "/storage/emulated/0/Music/song_$idx.flac",
+                uriString = "file:///Music/song_$idx.flac",
+                extension = "flac",
+                durationMs = 200_000L
+            )
+        }
+
+        val anchor = sampleTracks[3]
+        val anchoredQueue = PlaybackQueueManager.buildShuffledQueueKeepingFirst(
+            items = sampleTracks,
+            anchorItem = anchor,
+            idSelector = { it.id },
+            random = Random(7)
+        )
+        assertEquals(sampleTracks.size, anchoredQueue.size)
+        assertEquals(anchor.id, anchoredQueue.first().id)
+        assertEquals(sampleTracks.map { it.id }.toSet(), anchoredQueue.map { it.id }.toSet())
+
+        val lastPlayedId = 2L
+        for (seed in 0..29) {
+            val nextCycle = PlaybackQueueManager.reshuffleNextCycle(
+                items = sampleTracks,
+                lastPlayedId = lastPlayedId,
+                idSelector = { it.id },
+                random = Random(seed)
+            )
+            assertEquals(sampleTracks.size, nextCycle.size)
+            assertEquals(sampleTracks.map { it.id }.toSet(), nextCycle.map { it.id }.toSet())
+            assertNotEquals(lastPlayedId, nextCycle.first().id)
+        }
     }
 }
