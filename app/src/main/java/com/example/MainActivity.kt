@@ -139,15 +139,42 @@ fun MuffinMusicApp(
         viewModel.onAudioPermissionResult(granted)
     }
 
+    val startupPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val audioGranted = results[requiredAudioPermission]
+            ?: (ContextCompat.checkSelfPermission(
+                context,
+                requiredAudioPermission
+            ) == PackageManager.PERMISSION_GRANTED)
+        viewModel.onAudioPermissionResult(audioGranted)
+    }
+
     LaunchedEffect(Unit) {
-        val alreadyGranted = ContextCompat.checkSelfPermission(
+        val audioAlreadyGranted = ContextCompat.checkSelfPermission(
             context,
             requiredAudioPermission
         ) == PackageManager.PERMISSION_GRANTED
-        if (alreadyGranted) {
+        if (audioAlreadyGranted) {
             viewModel.onAudioPermissionResult(true)
-        } else {
-            audioPermissionLauncher.launch(requiredAudioPermission)
+        }
+
+        val missingPermissions = buildList {
+            if (!audioAlreadyGranted) {
+                add(requiredAudioPermission)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val notifGranted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!notifGranted) {
+                    add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        }
+        if (missingPermissions.isNotEmpty()) {
+            startupPermissionsLauncher.launch(missingPermissions.toTypedArray())
         }
     }
 

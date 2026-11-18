@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.media3.common.C
 import com.example.data.local.BlacklistedFolderEntity
 import com.example.data.local.TrackEntity
 import com.example.data.network.OnlineLyricCandidate
@@ -9,6 +10,7 @@ import com.example.domain.LyricsLinkExtractor
 import com.example.domain.LyricsMatcher
 import com.example.domain.PlaybackQueueManager
 import com.example.domain.VoiceNoteFilterEngine
+import com.example.player.FixedShuffleOrder
 import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -304,5 +306,37 @@ class ExampleUnitTest {
             assertEquals(sampleTracks.map { it.id }.toSet(), nextCycle.map { it.id }.toSet())
             assertNotEquals(lastPlayedId, nextCycle.first().id)
         }
+    }
+
+    @Test
+    fun fixedShuffleOrder_traversesPermutationWithoutRepeatsAndHandlesMutations() {
+        val shuffleOrder = FixedShuffleOrder(intArrayOf(2, 0, 4, 1, 3))
+        assertEquals(5, shuffleOrder.length)
+        assertEquals(2, shuffleOrder.firstIndex)
+        assertEquals(3, shuffleOrder.lastIndex)
+
+        assertEquals(0, shuffleOrder.getNextIndex(2))
+        assertEquals(4, shuffleOrder.getNextIndex(0))
+        assertEquals(1, shuffleOrder.getNextIndex(4))
+        assertEquals(3, shuffleOrder.getNextIndex(1))
+        assertEquals(C.INDEX_UNSET, shuffleOrder.getNextIndex(3))
+
+        assertEquals(C.INDEX_UNSET, shuffleOrder.getPreviousIndex(2))
+        assertEquals(2, shuffleOrder.getPreviousIndex(0))
+        assertEquals(0, shuffleOrder.getPreviousIndex(4))
+        assertEquals(4, shuffleOrder.getPreviousIndex(1))
+        assertEquals(1, shuffleOrder.getPreviousIndex(3))
+
+        val anchored = FixedShuffleOrder.buildAnchoredFisherYates(size = 8, anchorIndex = 5)
+        assertEquals(8, anchored.size)
+        assertEquals(5, anchored.first())
+        assertEquals((0 until 8).toSet(), anchored.toSet())
+
+        val removed = shuffleOrder.cloneAndRemove(1, 2)
+        assertEquals(4, removed.length)
+
+        val cleared = shuffleOrder.cloneAndClear()
+        assertEquals(0, cleared.length)
+        assertEquals(C.INDEX_UNSET, cleared.firstIndex)
     }
 }

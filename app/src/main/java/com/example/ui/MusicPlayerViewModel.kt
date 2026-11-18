@@ -2,14 +2,20 @@ package com.example.ui
 
 import android.Manifest
 import android.app.Application
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import com.example.data.MusicRepository
 import com.example.data.local.BlacklistedFolderEntity
 import com.example.data.local.PlaylistWithTracks
@@ -22,7 +28,11 @@ import com.example.domain.LrcParser
 import com.example.domain.ParsedLyrics
 import com.example.domain.PlaybackQueueManager
 import com.example.domain.VoiceNoteFilterEngine
+import com.example.player.FixedShuffleOrder
+import com.example.player.MediaItemMapper
+import com.example.player.PlaybackService
 import com.example.ui.theme.AppThemePreset
+import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -160,14 +170,73 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     )
     private val _statusBanner = MutableStateFlow<String?>(null)
 
-    private var mediaPlayer: MediaPlayer? = null
+    private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var mediaController: MediaController? = null
+    private var pendingControllerAction: ((MediaController) -> Unit)? = null
     private var progressTickerJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var batchLyricsJob: Job? = null
     private var currentVolume: Float = 1.0f
-    private var baseQueue: List<TrackEntity> = emptyList()
-    private var activeQueue: List<TrackEntity> = emptyList()
-    private var activeQueueIndex: Int = -1
+
+    private val controllerPlayerListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (_sleepTimer.value.waitingForTrackEnd &&
+                (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                    reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT)
+            ) {
+                mediaController?.pause()
+                mediaController?.seekTo(0L)
+                _isPlaying.value = false
+                _playbackPositionMs.value = 0L
+                cancelSleepTimer()
+                showBanner("Sleep Timer finished after final track")
+                return
+            }
+            _currentTrackId.value = mediaItem?.mediaId?.toLongOrNull()
+            mediaController?.let { controller ->
+                _playbackPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+                if (controller.duration > 0L) {
+                    _playbackDurationMs.value = controller.duration
+                }
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _isPlaying.value = isPlaying
+            mediaController?.let { controller ->
+                _playbackPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+                if (controller.duration > 0L) {
+                    _playbackDurationMs.value = controller.duration
+                }
+            }
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            val controller = mediaController ?: return
+            if (controller.duration > 0L) {
+                _playbackDurationMs.value = controller.duration
+            }
+            if (playbackState == Player.STATE_ENDED && _sleepTimer.value.waitingForTrackEnd) {
+                _isPlaying.value = false
+                _playbackPositionMs.value = 0L
+                cancelSleepTimer()
+                showBanner("Sleep Timer finished after final track")
+            }
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            _isShuffle.value = shuffleModeEnabled
+        }
+
+        override fun onRepeatModeChanged(repeatMode: Int) {
+            _isRepeatOne.value = (repeatMode == Player.REPEAT_MODE_ONE)
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            _isPlaying.value = false
+            showBanner("Unable to play track (${error.errorCodeName}) — try rescanning library")
+        }
+    }
 
     private data class CoreDataSnapshot(
         val allTracks: List<TrackEntity>,
@@ -358,6 +427,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     )
 
     init {
+        connectMediaController()
         viewModelScope.launch {
             repository.ensureDefaultFilterRules()
             if (checkAudioPermissionGranted()) {
@@ -366,6 +436,56 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
         startProgressTicker()
+    }
+
+    private fun connectMediaController() {
+        if (controllerFuture != null) return
+        val app = getApplication<Application>()
+        val sessionToken = SessionToken(app, ComponentName(app, PlaybackService::class.java))
+        val future = MediaController.Builder(app, sessionToken).buildAsync()
+        controllerFuture = future
+        future.addListener(
+            {
+                runCatching { future.get() }
+                    .onSuccess { controller ->
+                        mediaController = controller
+                        controller.addListener(controllerPlayerListener)
+                        syncStateFromController(controller)
+                        pendingControllerAction?.let { action ->
+                            pendingControllerAction = null
+                            action(controller)
+                        }
+                    }
+                    .onFailure {
+                        controllerFuture = null
+                    }
+            },
+            ContextCompat.getMainExecutor(app)
+        )
+    }
+
+    private fun syncStateFromController(controller: MediaController) {
+        val activeId = controller.currentMediaItem?.mediaId?.toLongOrNull()
+        if (activeId != null) {
+            _currentTrackId.value = activeId
+        }
+        _isPlaying.value = controller.isPlaying
+        _isShuffle.value = controller.shuffleModeEnabled
+        _isRepeatOne.value = (controller.repeatMode == Player.REPEAT_MODE_ONE)
+        _playbackPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+        if (controller.duration > 0L) {
+            _playbackDurationMs.value = controller.duration
+        }
+    }
+
+    private fun withController(action: (MediaController) -> Unit) {
+        val controller = mediaController
+        if (controller != null && controller.isConnected) {
+            action(controller)
+        } else {
+            pendingControllerAction = action
+            connectMediaController()
+        }
     }
 
     private fun checkAudioPermissionGranted(): Boolean {
@@ -440,9 +560,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         if (ids.isEmpty()) return
         viewModelScope.launch {
             val currentId = uiState.value.currentTrack?.id
-            if (currentId != null && currentId in ids && _isPlaying.value) {
-                releaseMediaPlayer()
+            if (currentId != null && currentId in ids) {
+                mediaController?.pause()
+                removeTracksFromControllerQueue(ids.toSet())
                 _isPlaying.value = false
+            } else {
+                removeTracksFromControllerQueue(ids.toSet())
             }
             repository.setTracksHidden(ids, true)
             clearSelection()
@@ -457,10 +580,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             val currentId = uiState.value.currentTrack?.id
             if (currentId != null && currentId in ids) {
-                releaseMediaPlayer()
+                mediaController?.pause()
                 _isPlaying.value = false
                 _currentTrackId.value = null
             }
+            removeTracksFromControllerQueue(ids)
             repository.deleteTracksFromDevice(targets)
             clearSelection()
             showBanner("Deleted ${targets.size} file(s) from device")
@@ -488,23 +612,54 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // Playback Controls & Fisher-Yates Shuffled Queue Management
+    // Playback Controls via Media3 MediaController -> PlaybackService
     fun playAll(tracks: List<TrackEntity>, openPlayerTab: Boolean = false) {
         if (tracks.isEmpty()) return
+        if (openPlayerTab) {
+            _activeTab.value = AppTab.PLAYER_LYRICS
+        }
+        val mediaItems = tracks.map(MediaItemMapper::toMediaItem)
+        _currentTrackId.value = tracks.first().id
+        _playbackDurationMs.value = tracks.first().durationMs
+        _playbackPositionMs.value = 0L
         _isShuffle.value = false
-        baseQueue = tracks
-        activeQueue = tracks
-        activeQueueIndex = 0
-        startPlayback(tracks.first(), openPlayerTab = openPlayerTab)
+
+        withController { controller ->
+            controller.shuffleModeEnabled = false
+            controller.repeatMode = if (_isRepeatOne.value) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+            controller.setMediaItems(mediaItems, 0, 0L)
+            controller.volume = currentVolume
+            controller.prepare()
+            controller.play()
+        }
     }
 
     fun shuffleAndPlay(tracks: List<TrackEntity>, openPlayerTab: Boolean = false) {
         if (tracks.isEmpty()) return
+        if (openPlayerTab) {
+            _activeTab.value = AppTab.PLAYER_LYRICS
+        }
+        val mediaItems = tracks.map(MediaItemMapper::toMediaItem)
+        val shuffledIndices = PlaybackQueueManager.fisherYatesShuffle(tracks.indices.toList()).toIntArray()
+        val firstIdx = shuffledIndices.firstOrNull() ?: 0
+        val firstTrack = tracks[firstIdx]
+
+        _currentTrackId.value = firstTrack.id
+        _playbackDurationMs.value = firstTrack.durationMs
+        _playbackPositionMs.value = 0L
         _isShuffle.value = true
-        baseQueue = tracks
-        activeQueue = PlaybackQueueManager.fisherYatesShuffle(tracks)
-        activeQueueIndex = 0
-        startPlayback(activeQueue.first(), openPlayerTab = openPlayerTab)
+
+        withController { controller ->
+            controller.repeatMode = if (_isRepeatOne.value) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+            controller.setMediaItems(mediaItems, firstIdx, 0L)
+            controller.volume = currentVolume
+            controller.sendCustomCommand(
+                MediaItemMapper.CMD_PLAY_WITH_SHUFFLE_ORDER,
+                Bundle().apply {
+                    putIntArray(MediaItemMapper.EXTRA_SHUFFLED_INDICES, shuffledIndices)
+                }
+            )
+        }
         showBanner("Shuffling ${tracks.size} song(s)")
     }
 
@@ -513,94 +668,102 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         openPlayerTab: Boolean = false,
         queueContext: List<TrackEntity>? = null
     ) {
-        val visible = uiState.value.visibleTracks
-        val sourceList = when {
-            !queueContext.isNullOrEmpty() -> queueContext
-            baseQueue.any { it.id == track.id } -> baseQueue
-            else -> visible
-        }
-
-        if (queueContext != null && queueContext.isNotEmpty()) {
-            baseQueue = queueContext
-            activeQueue = if (_isShuffle.value) {
-                PlaybackQueueManager.buildShuffledQueueKeepingFirst(queueContext, track) { it.id }
-            } else {
-                queueContext
-            }
-            activeQueueIndex = activeQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        } else if (activeQueue.none { it.id == track.id }) {
-            baseQueue = sourceList
-            activeQueue = if (_isShuffle.value) {
-                PlaybackQueueManager.buildShuffledQueueKeepingFirst(sourceList, track) { it.id }
-            } else {
-                sourceList
-            }
-            activeQueueIndex = activeQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        } else {
-            activeQueueIndex = activeQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        }
-
-        val isSameTrack = _currentTrackId.value == track.id && mediaPlayer != null
-        if (isSameTrack) {
-            if (openPlayerTab) {
-                _activeTab.value = AppTab.PLAYER_LYRICS
-            }
-            togglePlayPause()
-            return
-        }
-
-        startPlayback(track, openPlayerTab = openPlayerTab)
-    }
-
-    private fun startPlayback(track: TrackEntity, openPlayerTab: Boolean) {
-        _currentTrackId.value = track.id
-        _playbackDurationMs.value = track.durationMs
-
         if (openPlayerTab) {
             _activeTab.value = AppTab.PLAYER_LYRICS
         }
-
-        viewModelScope.launch {
-            repository.incrementPlayCount(track.id)
-        }
-
-        releaseMediaPlayer()
-        _playbackPositionMs.value = 0L
-
-        runCatching {
-            val mp = MediaPlayer()
-            val uri = Uri.parse(track.uriString)
-            mp.setDataSource(getApplication(), uri)
-            mp.prepare()
-            val actualDuration = mp.duration.toLong().coerceAtLeast(track.durationMs)
-            _playbackDurationMs.value = actualDuration
-            mp.setVolume(currentVolume, currentVolume)
-            mp.start()
-            _isPlaying.value = true
-
-            mp.setOnCompletionListener {
-                handleTrackCompleted()
+        withController { controller ->
+            val currentControllerId = controller.currentMediaItem?.mediaId?.toLongOrNull()
+            val queueMatches = queueContext == null || queueMatchesController(controller, queueContext)
+            if (currentControllerId == track.id && controller.mediaItemCount > 0 && queueMatches) {
+                if (controller.isPlaying) {
+                    controller.pause()
+                } else {
+                    controller.prepare()
+                    controller.play()
+                }
+                return@withController
             }
-            mediaPlayer = mp
-        }.onFailure {
-            _isPlaying.value = false
-            showBanner("Unable to play \"${track.title}\" — try rescanning library")
+
+            if (queueContext == null) {
+                val existingIdx = findTrackIndexInController(controller, track.id)
+                if (existingIdx >= 0) {
+                    _currentTrackId.value = track.id
+                    _playbackDurationMs.value = track.durationMs
+                    _playbackPositionMs.value = 0L
+                    controller.seekToDefaultPosition(existingIdx)
+                    controller.volume = currentVolume
+                    controller.prepare()
+                    controller.play()
+                    return@withController
+                }
+            }
+
+            val sourceQueue = queueContext?.takeIf { it.isNotEmpty() }
+                ?: uiState.value.visibleTracks.ifEmpty { listOf(track) }
+            val targetIdx = sourceQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+            val mediaItems = sourceQueue.map(MediaItemMapper::toMediaItem)
+
+            _currentTrackId.value = track.id
+            _playbackDurationMs.value = track.durationMs
+            _playbackPositionMs.value = 0L
+
+            controller.repeatMode = if (_isRepeatOne.value) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+            controller.setMediaItems(mediaItems, targetIdx, 0L)
+            controller.volume = currentVolume
+            if (controller.shuffleModeEnabled) {
+                val anchored = FixedShuffleOrder.buildAnchoredFisherYates(sourceQueue.size, targetIdx)
+                controller.sendCustomCommand(
+                    MediaItemMapper.CMD_ENABLE_ANCHORED_SHUFFLE,
+                    Bundle().apply {
+                        putIntArray(MediaItemMapper.EXTRA_SHUFFLED_INDICES, anchored)
+                    }
+                )
+            }
+            controller.prepare()
+            controller.play()
+        }
+    }
+
+    private fun queueMatchesController(controller: MediaController, queue: List<TrackEntity>): Boolean {
+        if (controller.mediaItemCount != queue.size) return false
+        for (i in queue.indices) {
+            if (controller.getMediaItemAt(i).mediaId != queue[i].id.toString()) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun findTrackIndexInController(controller: MediaController, trackId: Long): Int {
+        val targetId = trackId.toString()
+        for (i in 0 until controller.mediaItemCount) {
+            if (controller.getMediaItemAt(i).mediaId == targetId) return i
+        }
+        return -1
+    }
+
+    private fun removeTracksFromControllerQueue(trackIds: Set<Long>) {
+        val controller = mediaController ?: return
+        val idStrings = trackIds.map { it.toString() }.toSet()
+        for (i in controller.mediaItemCount - 1 downTo 0) {
+            if (controller.getMediaItemAt(i).mediaId in idStrings) {
+                controller.removeMediaItem(i)
+            }
         }
     }
 
     fun togglePlayPause() {
         val current = uiState.value.currentTrack ?: return
-        if (mediaPlayer == null) {
-            playTrack(current, openPlayerTab = false)
-            return
-        }
-        val mp = mediaPlayer
-        if (_isPlaying.value) {
-            runCatching { if (mp?.isPlaying == true) mp.pause() }
-            _isPlaying.value = false
-        } else {
-            runCatching { mp?.start() }
-            _isPlaying.value = true
+        withController { controller ->
+            if (controller.mediaItemCount == 0) {
+                playTrack(current, openPlayerTab = false)
+            } else if (controller.isPlaying) {
+                controller.pause()
+            } else {
+                controller.volume = currentVolume
+                controller.prepare()
+                controller.play()
+            }
         }
     }
 
@@ -608,116 +771,67 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         val duration = _playbackDurationMs.value.coerceAtLeast(1L)
         val clamped = positionMs.coerceIn(0L, duration)
         _playbackPositionMs.value = clamped
-        runCatching {
-            mediaPlayer?.seekTo(clamped.toInt())
-        }
-    }
-
-    private fun ensureSyncedQueue(): List<TrackEntity> {
-        val visible = uiState.value.visibleTracks
-        if (visible.isEmpty()) {
-            baseQueue = emptyList()
-            activeQueue = emptyList()
-            activeQueueIndex = -1
-            return emptyList()
-        }
-        val visibleById = visible.associateBy { it.id }
-        val filteredBase = baseQueue.mapNotNull { visibleById[it.id] }
-        baseQueue = filteredBase.ifEmpty { visible }
-
-        val filteredActive = activeQueue.mapNotNull { visibleById[it.id] }
-        if (filteredActive.isEmpty()) {
-            val current = uiState.value.currentTrack
-            activeQueue = if (_isShuffle.value) {
-                PlaybackQueueManager.buildShuffledQueueKeepingFirst(baseQueue, current) { it.id }
-            } else {
-                baseQueue
-            }
-        } else {
-            activeQueue = filteredActive
-        }
-        return activeQueue
+        mediaController?.seekTo(clamped)
     }
 
     fun skipNext() {
-        val queue = ensureSyncedQueue()
-        if (queue.isEmpty()) return
-        val currentId = uiState.value.currentTrack?.id
-        val idx = activeQueueIndex
-            .takeIf { it in queue.indices && queue[it].id == currentId }
-            ?: queue.indexOfFirst { it.id == currentId }
-
-        val nextTrack = if (idx >= 0 && idx + 1 < queue.size) {
-            activeQueueIndex = idx + 1
-            queue[activeQueueIndex]
-        } else if (_isShuffle.value) {
-            // Queue cycle finished: reshuffle a fresh Fisher-Yates cycle with no immediate repeat
-            val nextCycle = PlaybackQueueManager.reshuffleNextCycle(baseQueue, currentId) { it.id }
-            activeQueue = nextCycle
-            activeQueueIndex = 0
-            nextCycle.first()
-        } else {
-            activeQueueIndex = 0
-            queue.first()
+        withController { controller ->
+            if (controller.mediaItemCount == 0) {
+                val visible = uiState.value.visibleTracks
+                if (visible.isNotEmpty()) {
+                    playTrack(visible.first(), openPlayerTab = false, queueContext = visible)
+                }
+                return@withController
+            }
+            if (controller.hasNextMediaItem()) {
+                controller.seekToNextMediaItem()
+            } else {
+                controller.seekToDefaultPosition(0)
+            }
+            controller.prepare()
+            controller.play()
         }
-        startPlayback(nextTrack, openPlayerTab = false)
     }
 
     fun skipPrevious() {
-        if (_playbackPositionMs.value > 4000L) {
-            seekTo(0L)
-            return
+        withController { controller ->
+            if (controller.mediaItemCount == 0) return@withController
+            if (controller.currentPosition > 4000L) {
+                controller.seekTo(0L)
+                _playbackPositionMs.value = 0L
+            } else if (controller.hasPreviousMediaItem()) {
+                controller.seekToPreviousMediaItem()
+                controller.prepare()
+                controller.play()
+            } else {
+                controller.seekTo(0L)
+                _playbackPositionMs.value = 0L
+            }
         }
-        val queue = ensureSyncedQueue()
-        if (queue.isEmpty()) return
-        val currentId = uiState.value.currentTrack?.id
-        val idx = activeQueueIndex
-            .takeIf { it in queue.indices && queue[it].id == currentId }
-            ?: queue.indexOfFirst { it.id == currentId }
-        val prevIdx = if (idx > 0) idx - 1 else queue.lastIndex
-        activeQueueIndex = prevIdx
-        startPlayback(queue[prevIdx], openPlayerTab = false)
     }
 
     fun toggleShuffle() {
-        val nowShuffled = !_isShuffle.value
-        _isShuffle.value = nowShuffled
-        val visible = uiState.value.visibleTracks
-        val source = baseQueue.ifEmpty { visible }
-        baseQueue = source
-        val current = uiState.value.currentTrack
-        if (source.isNotEmpty()) {
-            if (nowShuffled) {
-                activeQueue = PlaybackQueueManager.buildShuffledQueueKeepingFirst(source, current) { it.id }
-                activeQueueIndex = 0
-            } else {
-                activeQueue = source
-                activeQueueIndex = current?.let { c -> activeQueue.indexOfFirst { it.id == c.id } }
-                    ?.coerceAtLeast(0) ?: 0
+        withController { controller ->
+            val nowShuffled = !controller.shuffleModeEnabled
+            if (nowShuffled && controller.mediaItemCount == 0) {
+                val visible = uiState.value.visibleTracks
+                if (visible.isNotEmpty()) {
+                    shuffleAndPlay(visible, openPlayerTab = false)
+                    return@withController
+                }
             }
+            controller.shuffleModeEnabled = nowShuffled
+            _isShuffle.value = nowShuffled
+            showBanner(if (nowShuffled) "Shuffle enabled" else "Shuffle disabled")
         }
-        showBanner(if (nowShuffled) "Shuffle enabled" else "Shuffle disabled")
     }
 
     fun toggleRepeatOne() {
-        _isRepeatOne.update { !it }
-        showBanner(if (_isRepeatOne.value) "Repeat Current Track enabled" else "Repeat disabled")
-    }
-
-    private fun handleTrackCompleted() {
-        if (_sleepTimer.value.waitingForTrackEnd) {
-            _isPlaying.value = false
-            _playbackPositionMs.value = 0L
-            cancelSleepTimer()
-            showBanner("Sleep Timer finished after final track")
-            return
-        }
-        if (_isRepeatOne.value) {
-            seekTo(0L)
-            runCatching { mediaPlayer?.start() }
-            _isPlaying.value = true
-        } else {
-            skipNext()
+        withController { controller ->
+            val enableRepeatOne = controller.repeatMode != Player.REPEAT_MODE_ONE
+            controller.repeatMode = if (enableRepeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+            _isRepeatOne.value = enableRepeatOne
+            showBanner(if (enableRepeatOne) "Repeat Current Track enabled" else "Repeat disabled")
         }
     }
 
@@ -726,10 +840,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         progressTickerJob = viewModelScope.launch {
             while (isActive) {
                 delay(150L)
-                if (_isPlaying.value) {
-                    val mp = mediaPlayer
-                    if (mp != null && runCatching { mp.isPlaying }.getOrDefault(false)) {
-                        _playbackPositionMs.value = mp.currentPosition.toLong()
+                val controller = mediaController
+                if (controller != null && controller.isConnected && controller.isPlaying) {
+                    _playbackPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+                    if (controller.duration > 0L) {
+                        _playbackDurationMs.value = controller.duration
                     }
                 }
             }
@@ -1147,6 +1262,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         if (title.isBlank()) return
         viewModelScope.launch {
             repository.updateTrackTags(trackId, title, artist, album)
+            val controller = mediaController
+            if (controller != null && controller.isConnected) {
+                val idx = findTrackIndexInController(controller, trackId)
+                if (idx >= 0) {
+                    val existingItem = controller.getMediaItemAt(idx)
+                    val updatedMeta = existingItem.mediaMetadata.buildUpon()
+                        .setTitle(title.trim())
+                        .setArtist(artist.trim())
+                        .setAlbumTitle(album.trim())
+                        .build()
+                    controller.replaceMediaItem(
+                        idx,
+                        existingItem.buildUpon().setMediaMetadata(updatedMeta).build()
+                    )
+                }
+            }
             showBanner("Updated track tags for \"${title.trim()}\"")
         }
     }
@@ -1156,6 +1287,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             if (uiState.value.currentTrack?.id == track.id && _isPlaying.value) {
                 skipNext()
             }
+            removeTracksFromControllerQueue(setOf(track.id))
             repository.setTrackHidden(track.id, true)
             showBanner("\"${track.title}\" hidden from library (Restorable in Voice Shield)")
         }
@@ -1171,10 +1303,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     fun deleteTrackFromDevice(track: TrackEntity) {
         viewModelScope.launch {
             if (uiState.value.currentTrack?.id == track.id) {
-                releaseMediaPlayer()
+                mediaController?.pause()
                 _isPlaying.value = false
                 _currentTrackId.value = null
             }
+            removeTracksFromControllerQueue(setOf(track.id))
             repository.deleteTrackFromDevice(track)
             showBanner("Removed \"${track.title}\" from device")
         }
@@ -1218,7 +1351,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         sleepTimerJob?.cancel()
         val totalSecs = (minutes * 60).coerceAtLeast(10)
         currentVolume = 1.0f
-        runCatching { mediaPlayer?.setVolume(1.0f, 1.0f) }
+        mediaController?.volume = 1.0f
 
         _sleepTimer.value = SleepTimerState(
             isActive = true,
@@ -1240,7 +1373,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 if (_sleepTimer.value.gentleFadeOut && remaining in 1..30) {
                     val fadedVol = (remaining / 30f).coerceIn(0.08f, 1.0f)
                     currentVolume = fadedVol
-                    runCatching { mediaPlayer?.setVolume(fadedVol, fadedVol) }
+                    mediaController?.volume = fadedVol
                 }
             }
 
@@ -1249,7 +1382,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     _sleepTimer.update { it.copy(waitingForTrackEnd = true) }
                     showBanner("Sleep Timer: Finishing current song before stopping…")
                 } else {
-                    runCatching { if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause() }
+                    mediaController?.pause()
                     _isPlaying.value = false
                     cancelSleepTimer()
                     showBanner("Sleep Timer paused playback")
@@ -1267,7 +1400,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     fun cancelSleepTimer() {
         sleepTimerJob?.cancel()
         currentVolume = 1.0f
-        runCatching { mediaPlayer?.setVolume(1.0f, 1.0f) }
+        mediaController?.volume = 1.0f
         _sleepTimer.value = SleepTimerState()
     }
 
@@ -1301,17 +1434,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun releaseMediaPlayer() {
-        runCatching {
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-        }
-        mediaPlayer = null
-    }
-
     override fun onCleared() {
         super.onCleared()
         batchLyricsJob?.cancel()
-        releaseMediaPlayer()
+        progressTickerJob?.cancel()
+        sleepTimerJob?.cancel()
+        mediaController?.removeListener(controllerPlayerListener)
+        mediaController = null
+        controllerFuture?.let { MediaController.releaseFuture(it) }
+        controllerFuture = null
     }
 }
