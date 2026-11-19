@@ -58,6 +58,8 @@ jobs:
 
       - name: Build APK
         if: steps.check.outputs.ok == 'true'
+        env:
+          MUSIC_LICENCE_KEY: ${{ secrets.MUSIC_LICENCE_KEY }}
         run: |
           if [ -f gradlew ]; then
             chmod +x gradlew

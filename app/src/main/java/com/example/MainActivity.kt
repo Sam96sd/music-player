@@ -100,8 +100,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MusicPlayerViewModel = viewModel()
             val state by viewModel.uiState.collectAsStateWithLifecycle()
+            var activated by remember { mutableStateOf(com.example.licence.Licence.isActivated(this)) }
             MyApplicationTheme(themePreset = state.themePreset) {
-                MuffinMusicApp(viewModel = viewModel, stateOverride = state)
+                if (activated) {
+                    MuffinMusicApp(viewModel = viewModel, stateOverride = state)
+                } else {
+                    com.example.licence.ActivationScreen(onActivated = { activated = true })
+                }
             }
         }
     }

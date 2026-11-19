@@ -16,10 +16,18 @@ android {
     applicationId = "com.aistudio.pulsewave.kxmzqp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Activation key: comes from the MUSIC_LICENCE_KEY secret (GitHub Actions) and never lives in
+    // this public repository. A CI build without it fails, so no release ships unprotected.
+    val licenceKey = System.getenv("MUSIC_LICENCE_KEY")?.trim().orEmpty()
+    if (System.getenv("CI") == "true" && !licenceKey.matches(Regex("[0-9a-fA-F]{64}"))) {
+      throw GradleException("MUSIC_LICENCE_KEY secret is missing or not 64 hex characters")
+    }
+    buildConfigField("String", "LICENCE_KEY", "\"$licenceKey\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

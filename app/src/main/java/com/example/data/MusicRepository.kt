@@ -342,7 +342,7 @@ class MusicRepository(
             val scannedTracks = mutableListOf<TrackEntity>()
             val scannedSourceKeys = HashSet<String>()
 
-            runCatching {
+            val scanOk = runCatching {
                 context.contentResolver.query(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                     projectionList.toTypedArray(),
@@ -451,15 +451,26 @@ class MusicRepository(
                         }
                         scannedTracks.add(entity)
                     }
-                }
-            }
+                } ?: error("MediaStore query returned no cursor")
+            }.isSuccess
 
-            // Identify any MediaStore tracks in DB that no longer exist on the device (or were duplicates)
+            // A failed query (no permission yet, storage not mounted) used to look like "every song
+            // was deleted": all tracks and their saved lyrics were wiped, then re-added with new ids.
+            // Keep the library untouched in that case.
+            if (!scanOk) return@withContext existingTracks.size
+            val existingMediaStoreCount = existingTracks.count { it.sourceKey.startsWith("ms_") }
+            if (scannedTracks.isEmpty() && existingMediaStoreCount > 0) return@withContext existingTracks.size
+
+            // Identify any MediaStore tracks in DB that no longer exist on the device (or were duplicates).
+            // A track re-matched by file path keeps its old row id under a new MediaStore id: it is not
+            // stale, so its saved lyrics and playlist entries must not be deleted.
+            val keptIds = scannedTracks.mapNotNullTo(HashSet()) { it.id.takeIf { id -> id != 0L } }
             val staleIds = existingTracks
                 .filter { existing ->
                     existing.sourceKey.startsWith("ms_") && existing.sourceKey !in scannedSourceKeys
                 }
                 .map { it.id }
+                .filter { it !in keptIds }
 
             dao.syncMediaStoreTracks(
                 tracksToUpsert = scannedTracks,
