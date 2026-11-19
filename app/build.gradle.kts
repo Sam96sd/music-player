@@ -23,7 +23,8 @@ android {
 
     // Activation key: comes from the MUSIC_LICENCE_KEY secret (GitHub Actions) and never lives in
     // this public repository. A CI build without it fails, so no release ships unprotected.
-    val licenceKey = System.getenv("MUSIC_LICENCE_KEY")?.trim().orEmpty()
+    // Keep hex digits only: a pasted secret may carry a BOM, quotes or a line break.
+    val licenceKey = System.getenv("MUSIC_LICENCE_KEY").orEmpty().replace(Regex("[^0-9a-fA-F]"), "")
     if (System.getenv("CI") == "true" && !licenceKey.matches(Regex("[0-9a-fA-F]{64}"))) {
       throw GradleException("MUSIC_LICENCE_KEY secret is missing or not 64 hex characters")
     }
